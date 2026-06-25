@@ -11,10 +11,19 @@ function normalizeModuleId(id: string) {
   return id.replace(/\\/g, '/')
 }
 
-function manualChunks(id: string) {
+export function manualChunks(id: string) {
   const moduleId = normalizeModuleId(id)
 
   if (moduleId.includes('/node_modules/')) {
+    if (
+      moduleId.includes('/echarts/')
+      || moduleId.includes('/zrender/')
+      || moduleId.includes('/echarts-for-react/')
+      || moduleId.includes('/echarts-wordcloud/')
+    ) {
+      return 'echarts-vendor'
+    }
+
     if (
       moduleId.includes('/@nivo/')
       || moduleId.includes('/recharts/')
@@ -98,6 +107,7 @@ export default defineConfig({
     },
   },
   build: {
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
         manualChunks,
