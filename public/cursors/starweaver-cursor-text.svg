@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <title>Starweaver text fused I-beam cursor</title>
+  <desc>
+    Text-entry fused I-beam variant using one single fused contour with the
+    same black fill and white outline language as the four-anchor pointer.
+    Hotspot sits at the center of the vertical beam.
+  </desc>
+  <path
+    d="M 12.20 6.25 L 19.80 6.25 C 20.55 6.25 21.15 6.85 21.15 7.60 L 21.15 7.95 C 21.15 8.70 20.55 9.30 19.80 9.30 L 18.45 9.30 C 17.95 9.30 17.55 9.70 17.55 10.20 L 17.55 21.80 C 17.55 22.30 17.95 22.70 18.45 22.70 L 19.80 22.70 C 20.55 22.70 21.15 23.30 21.15 24.05 L 21.15 24.40 C 21.15 25.15 20.55 25.75 19.80 25.75 L 12.20 25.75 C 11.45 25.75 10.85 25.15 10.85 24.40 L 10.85 24.05 C 10.85 23.30 11.45 22.70 12.20 22.70 L 13.55 22.70 C 14.05 22.70 14.45 22.30 14.45 21.80 L 14.45 10.20 C 14.45 9.70 14.05 9.30 13.55 9.30 L 12.20 9.30 C 11.45 9.30 10.85 8.70 10.85 7.95 L 10.85 7.60 C 10.85 6.85 11.45 6.25 12.20 6.25 Z"
+    fill="#05070b"
+    stroke="#f7f5ef"
+    stroke-width="1.8"
+    stroke-linejoin="round"
+  />
+</svg>

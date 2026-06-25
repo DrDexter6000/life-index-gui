@@ -1,0 +1,89 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/public-export/
+build/public-export-manifest.*
+
+# Tool caches
+.playwright-mcp/
+.ruff_cache/
+.sisyphus/
+.experiments/
+.kimi/
+.omo/
+.serena/
+
+# Logs and debug output
+*.log
+server.log
+build-output.txt
+npm-stderr.txt
+npm-stdout.txt
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Alternate lock files
+bun.lock
+
+# Local-only development, governance, and tool artifacts
+.dev/
+.strategy/
+.impeccable/
+.archive/
+
+# Retired public-development docs; do not recreate as active SSOT
+Life_Index_BIS.md
+docs/CURRENT_STATE.md
+docs/ROADMAP.md
+docs/ACCEPTANCE.md
+docs/TECH_STACK.md
+docs/archive/
+docs/decisions/
+prototype/
+
+# Local helper scripts
+scripts/local/start-claude-here.bat
+scripts/local/start-dev.bat
+scripts/local/start-dev.ps1
+scripts/local/start-keepalive.bat
+scripts/local/start-spa-server.ps1
+scripts/local/start-vite.bat
+scripts/local/spa-serve.py
+
+# Local diagnostics
+tools/diagnostics/screenshot-compare.mjs
+tools/diagnostics/test-wmi-heartbeat.js
+tools/diagnostics/output/
+tools/capture_review.cjs
+
+# Temporary files (screenshots, cache, etc.)
+.tmp/
+*.tmp
+*.bak
+
+# Large media assets
+public/*.mp4
+!public/bg-video.mp4
+
+# Screenshot artifacts should live in .tmp/screenshots/
+# Do not commit full-page verification captures
+/*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+.pytest_cache/
+
+# Runtime errors
+*.err
+.benchmarks/
+
+# transient dev-server pid files
+*.pid

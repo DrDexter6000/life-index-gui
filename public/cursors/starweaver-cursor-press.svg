@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <title>Starweaver four-anchor press cursor</title>
+  <desc>
+    Pressed variant of the four-anchor cursor. The A/B/C/D outline is kept
+    but visually condenses with a darker fill and no cyan ornament.
+  </desc>
+  <path
+    d="M 8.35 7.56 L 24.40 15.40 Q 26.10 16.22 24.18 16.58 L 19.28 17.50 Q 16.38 18.05 14.88 20.60 L 12.46 24.68 Q 11.42 26.42 10.94 24.44 L 6.94 8.62 Q 6.48 6.72 8.35 7.56 Z"
+    fill="#030407"
+    stroke="#f7f5ef"
+    stroke-width="2.4"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    paint-order="stroke fill"
+  />
+</svg>

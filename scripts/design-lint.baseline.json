@@ -1,0 +1,57 @@
+{
+  "src/components/archives/MonthlyHeatmap.tsx": {
+    "no-raw-hex": 3,
+    "font-via-var": 2
+  },
+  "src/components/archives/PeopleGraph.tsx": {
+    "no-raw-hex": 4,
+    "font-via-var": 2
+  },
+  "src/components/archives/TagCloud.tsx": {
+    "no-raw-hex": 3,
+    "font-via-var": 2
+  },
+  "src/components/layout/ParticleCanvas.tsx": {
+    "no-raw-hex": 3
+  },
+  "src/lib/schemas.ts": {
+    "no-raw-hex": 1
+  },
+  "src/app/routes/JournalDetail.tsx": {
+    "blur-whitelist": 1,
+    "no-arbitrary-geometry": 19
+  },
+  "src/app/routes/Archives.tsx": {
+    "no-arbitrary-geometry": 17
+  },
+  "src/app/routes/EmptyState.tsx": {
+    "no-arbitrary-geometry": 5
+  },
+  "src/app/routes/EntityGraph.tsx": {
+    "no-arbitrary-geometry": 2
+  },
+  "src/app/routes/HealthCenter.tsx": {
+    "no-arbitrary-geometry": 1
+  },
+  "src/app/routes/ImportWorkflow.tsx": {
+    "no-arbitrary-geometry": 24
+  },
+  "src/app/routes/IndexDiagnostics.tsx": {
+    "no-arbitrary-geometry": 2
+  },
+  "src/app/routes/IndexTreeDiagnostics.tsx": {
+    "no-arbitrary-geometry": 2
+  },
+  "src/app/routes/Recall.tsx": {
+    "no-arbitrary-geometry": 9
+  },
+  "src/app/routes/TheCore.tsx": {
+    "no-arbitrary-geometry": 10
+  },
+  "src/components/celestial/MemoryFragments.tsx": {
+    "font-via-var": 1
+  },
+  "src/components/journal/MarkdownRenderer.tsx": {
+    "font-via-var": 2
+  }
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "token": "extensions.colorMeta.void.tonalRamp.2",
+    "cssVar": "--color-void",
+    "expectIn": "src/styles/tailwind.css"
+  },
+  {
+    "token": "extensions.colorMeta.gold.tonalRamp.6",
+    "cssVar": "--color-gold",
+    "expectIn": "src/styles/tailwind.css"
+  },
+  {
+    "token": "extensions.colorMeta.cyan.tonalRamp.6",
+    "cssVar": "--color-cyan",
+    "expectIn": "src/styles/tailwind.css"
+  },
+  {
+    "token": "extensions.colorMeta.coral.tonalRamp.6",
+    "cssVar": "--color-coral",
+    "expectIn": "src/styles/tailwind.css"
+  },
+  {
+    "token": "extensions.colorMeta.lavender.tonalRamp.6",
+    "cssVar": "--color-lavender",
+    "expectIn": "src/styles/tailwind.css"
+  }
+]

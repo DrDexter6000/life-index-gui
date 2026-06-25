@@ -1,0 +1,39 @@
+{
+  "scanGlob": "src/**/*.{ts,tsx}",
+  "excludePatterns": [
+    "*.test.*",
+    "src/test/**",
+    "src/styles/**"
+  ],
+  "rules": {
+    "no-raw-hex": {
+      "pattern": "#[0-9a-fA-F]{3,8}\\b",
+      "flags": "",
+      "description": "No bare hex color values — use CSS variables from tokens"
+    },
+    "blur-whitelist": {
+      "pattern": "backdropFilter|backdrop-filter|blur\\(",
+      "flags": "",
+      "description": "backdrop-filter/blur only in whitelisted files",
+      "whitelist": [
+        "src/components/layout/TopNavBar.tsx",
+        "src/components/layout/MobileMenu.tsx",
+        "src/components/layout/BottomNavBar.tsx",
+        "src/components/archives/TopicPie.tsx",
+        "src/components/archives/MoodBar.tsx"
+      ]
+    },
+    "no-arbitrary-geometry": {
+      "pattern": "\\[\\d+(\\.\\d+)?(px|vh|dvh|rem)\\]",
+      "flags": "",
+      "description": "Route files must not use arbitrary pixel/vh/dvh/rem values",
+      "scopeGlob": "src/app/routes/*.tsx"
+    },
+    "font-via-var": {
+      "pattern": "fontFamily:\\s*['\"](?!var\\()|font-family:\\s*[^v]",
+      "flags": "",
+      "description": "Font family must use CSS variables (var(--font-*)); literal font names flagged, var() exempt"
+    }
+  },
+  "escapeHatch": "design-ok"
+}
