@@ -251,13 +251,13 @@ export default function Recall() {
           className="cursor-pointer text-xs text-[var(--color-secondary)]"
           style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em', textTransform: 'uppercase' }}
         >
-          {t('agentBridgeThinkingToggle')}
+          {t('hostAgentThinkingToggle')}
         </summary>
         <pre
           className="mt-3 whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-muted)]"
           style={{ fontFamily: 'var(--font-order)' }}
         >
-          {thinking || t('agentBridgeStreamThinkingUnavailable')}
+          {thinking || t('hostAgentStreamThinkingUnavailable')}
         </pre>
       </details>
     );
@@ -282,10 +282,10 @@ export default function Recall() {
       >
         <input
           type="text"
-          aria-label={t('agentBridgeQueryPlaceholder')}
+          aria-label={t('hostAgentQueryPlaceholder')}
           className="li-field-placeholder min-w-0 flex-1 bg-transparent text-[var(--text-control)] text-[var(--color-primary)] outline-none"
           style={searchInputStyle}
-          placeholder={t('agentBridgeQueryPlaceholder')}
+          placeholder={t('hostAgentQueryPlaceholder')}
           value={agentQueryText}
           onFocus={() => setIsAgentFocused(true)}
           onBlur={() => setIsAgentFocused(false)}
@@ -302,7 +302,7 @@ export default function Recall() {
         />
         <button
           type="button"
-          aria-label={t('agentBridgeQuerySubmit')}
+          aria-label={t('hostAgentQuerySubmit')}
           onClick={handleAgentQuerySubmit}
           disabled={!agentQueryText.trim() || hostStream.status === 'connecting' || hostStream.status === 'streaming'}
           className="shrink-0 cursor-pointer whitespace-nowrap rounded-full px-3 py-2 text-[0.75rem] font-medium transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
@@ -316,7 +316,7 @@ export default function Recall() {
           }}
           data-testid="agent-submit"
         >
-          {t('agentBridgeQuerySubmit')}
+          {t('hostAgentQuerySubmit')}
         </button>
       </div>
     </div>
@@ -594,7 +594,7 @@ export default function Recall() {
                 <CelestialLoader size="md" />
               </div>
               <p className="text-sm text-[var(--color-secondary)]" style={{ fontFamily: 'var(--font-order)' }}>
-                {t('agentBridgeProbeLoading')}
+                {t('hostAgentHealthLoading')}
               </p>
             </div>
           )}
@@ -602,8 +602,8 @@ export default function Recall() {
           {!agentChecking && !agentReady && (
             <div className="py-12 text-center" data-testid="agent-unavailable">
               <span className="material-symbols-outlined mb-3 block text-3xl text-[var(--color-secondary)]">cloud_off</span>
-              <p className="mb-1 text-sm text-[var(--color-secondary)]">{t('agentBridgeHostUnavailable')}</p>
-              <p className="text-xs text-[var(--color-muted)]">{t('agentBridgeTabUnavailable')}</p>
+              <p className="mb-1 text-sm text-[var(--color-secondary)]">{t('hostAgentUnavailable')}</p>
+              <p className="text-xs text-[var(--color-muted)]">{t('hostAgentTabUnavailable')}</p>
             </div>
           )}
 
@@ -632,7 +632,7 @@ export default function Recall() {
               {!hasAgentTurns && hostStream.status === 'idle' && !hostStream.finalResponse && (
                 <div className="py-10 text-center" data-testid="agent-idle">
                   <span className="material-symbols-outlined mb-3 block text-3xl text-[var(--color-secondary)]">psychology</span>
-                  <p className="text-sm text-[var(--color-secondary)]">{t('agentBridgeQueryEmpty')}</p>
+                  <p className="text-sm text-[var(--color-secondary)]">{t('hostAgentQueryEmpty')}</p>
                 </div>
               )}
             </section>

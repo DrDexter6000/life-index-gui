@@ -3,7 +3,7 @@
 North star (CHARTER「北极星」APEX): Life Index = tools + Skills for agents;
 intelligence — planning / multi-hop / reasoning / synthesis — belongs to the host
 agent; the GUI is **presentation only** and reaches the agent through the
-backend-mediated warm gateway. The GUI must therefore **never call an LLM
+backend-mediated host-agent handoff interface. The GUI must therefore **never call an LLM
 directly**. This gate fails if backend production code imports an LLM/model SDK.
 
 This is the intelligence-boundary sibling of ``test_l1_boundary.py`` (the
@@ -20,9 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = PROJECT_ROOT / "backend"
 
 # LLM / model SDKs the presentation-layer backend must never import. The GUI
-# never calls a model directly; it forwards queries to the host agent via the
-# warm gateway (see backend/adapter/agent_gateway_client.py, which raises rather
-# than ever falling back to a direct model call).
+# never calls a model directly; it forwards requests to the host-agent handoff
+# interface and never falls back to a direct model call.
 FORBIDDEN_LLM_MODULES = {
     "anthropic",
     "openai",
@@ -38,7 +37,7 @@ FORBIDDEN_LLM_MODULES = {
 
 _REASON = (
     "GUI is presentation-only and must never call an LLM directly; route through "
-    "the backend-mediated gateway (CHARTER north-star APEX)."
+    "the backend-mediated host-agent handoff interface (CHARTER north-star APEX)."
 )
 
 

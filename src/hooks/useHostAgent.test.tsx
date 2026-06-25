@@ -70,7 +70,7 @@ async function* streamEvents(): AsyncGenerator<HostAgentStreamEvent> {
 }
 
 describe('hostAgentKeys', () => {
-  it('uses host-agent scopes instead of legacy agent-bridge scopes', () => {
+  it('uses host-agent scopes for runtime-neutral handoff state', () => {
     expect(hostAgentKeys.health()).toEqual(['host-agent', 'health']);
     expect(hostAgentKeys.metadataProposal()).toEqual(['host-agent', 'metadata-proposal']);
     expect(hostAgentKeys.stream()).toEqual(['host-agent', 'stream']);

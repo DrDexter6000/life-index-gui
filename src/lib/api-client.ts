@@ -16,10 +16,6 @@ import {
   IndexTreeNodesResponseSchema,
   IndexTreeLensResponseSchema,
   IndexTreeShadowResponseSchema,
-  AgentBridgeProbeResponseSchema,
-  AgentBridgeGatewayHealthResponseSchema,
-  AgentBridgeQueryResponseSchema,
-  AgentBridgeStreamEventSchema,
   HostAgentHealthResponseSchema,
   HostAgentQueryResponseSchema,
   HostAgentMetadataProposalSchema,
@@ -609,10 +605,6 @@ export type IndexTreeSignal = 'topic' | 'people' | 'project';
 export type IndexTreeNodesResponse = z.infer<typeof IndexTreeNodesResponseSchema>;
 export type IndexTreeLensResponse = z.infer<typeof IndexTreeLensResponseSchema>;
 export type IndexTreeShadowResponse = z.infer<typeof IndexTreeShadowResponseSchema>;
-export type AgentBridgeProbeResponse = z.infer<typeof AgentBridgeProbeResponseSchema>;
-export type AgentBridgeGatewayHealthResponse = z.infer<typeof AgentBridgeGatewayHealthResponseSchema>;
-export type AgentBridgeQueryResponse = z.infer<typeof AgentBridgeQueryResponseSchema>;
-export type AgentBridgeStreamEvent = z.infer<typeof AgentBridgeStreamEventSchema>;
 export type HostAgentHealthResponse = z.infer<typeof HostAgentHealthResponseSchema>;
 export type HostAgentQueryResponse = z.infer<typeof HostAgentQueryResponseSchema>;
 export type HostAgentMetadataProposal = z.infer<typeof HostAgentMetadataProposalSchema>;
@@ -629,49 +621,6 @@ export interface HostAgentMetadataProposalRequest {
   policy: {
     preserve_user_fields: boolean;
   };
-}
-
-/** Rich answer mode for Agent Bridge query responses. Future verifier modes must remain renderable. */
-export type AgentBridgeMode = 'GROUNDED' | 'PARTIAL' | 'UNGROUNDED' | (string & {});
-
-/** Evidence item referenced by Agent Bridge answer. */
-export interface AgentBridgeEvidenceItem {
-  id: string;
-  rel_path: string;
-  title: string;
-  date: string;
-  snippet?: string;
-  excerpt?: string;
-  metadata?: {
-    location?: string;
-    topic?: string[];
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-
-/** Insight within an Agent Bridge answer, grounded in evidence refs. */
-export interface AgentBridgeInsight {
-  theme: string;
-  quote?: string;
-  date?: string;
-  interpretation?: string;
-  evidence_refs: string[];
-  [key: string]: unknown;
-}
-
-/** Structured answer within Agent Bridge rich query response. */
-export interface AgentBridgeAnswer {
-  mode: AgentBridgeMode;
-  summary?: string;
-  reason?: string | null;
-  insights: AgentBridgeInsight[];
-  related_findings: unknown[];
-  gap: string | null;
-  explanation: string | null;
-  what_was_found: unknown[];
-  suggestions: string[];
-  [key: string]: unknown;
 }
 
 // ── Entity types (S4 — Entity Graph Inspection) ──────────────────────────
@@ -803,78 +752,6 @@ export const indexTreeAPI = {
   getShadow: async (query: string): Promise<IndexTreeShadowResponse> => {
     const raw = await apiClient.get(`/index-tree/shadow?query=${encodeURIComponent(query)}`);
     return parseData(IndexTreeShadowResponseSchema, raw);
-  },
-};
-
-export const agentBridgeAPI = {
-  /** Fetch safe Agent Bridge operator readiness. Probe sends no journal evidence. */
-  getProbe: async (): Promise<AgentBridgeProbeResponse> => {
-    const raw = await apiClient.get('/agent-bridge/probe');
-    return parseData(AgentBridgeProbeResponseSchema, raw);
-  },
-
-  /** Fetch backend-mediated warm gateway liveness. Browser never calls gateway directly. */
-  getHealth: async (): Promise<AgentBridgeGatewayHealthResponse> => {
-    const raw = await apiClient.get('/agent-bridge/health');
-    return parseData(AgentBridgeGatewayHealthResponseSchema, raw);
-  },
-
-  /** Trigger explicit host-agent handoff through CLI/L3, never direct endpoint calls. */
-  query: async (query: string): Promise<AgentBridgeQueryResponse> => {
-    const raw = await apiClient.post('/agent-bridge/query', {
-      query: query.trim(),
-    });
-    return parseData(AgentBridgeQueryResponseSchema, raw);
-  },
-
-  /** Stream an Agent Bridge query over SSE and yield validated contract events. */
-  stream: async function* (
-    query: string,
-    options?: { signal?: AbortSignal; conversationId?: string },
-  ): AsyncGenerator<AgentBridgeStreamEvent> {
-    const body: { query: string; conversation_id?: string } = {
-      query: query.trim(),
-    };
-    if (options?.conversationId) {
-      body.conversation_id = options.conversationId;
-    }
-
-    const response = await fetch(`${API_BASE_URL}/agent-bridge/query/stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-      },
-      body: JSON.stringify(body),
-      signal: options?.signal,
-    });
-
-    if (!response.ok || !response.body) {
-      throw new APIClientError(
-        `HTTP ${response.status}: ${response.statusText}`,
-        'SERVER_ERROR',
-        response.status,
-      );
-    }
-
-    for await (const event of parseSseStream(response, AgentBridgeStreamEventSchema)) {
-      if (event.type === 'error') {
-        const errorData = event.data as
-          | { code?: string; message?: string }
-          | { error?: { code?: string; message?: string } };
-        const code =
-          ('error' in errorData && errorData.error?.code)
-          || ('code' in errorData && errorData.code)
-          || 'AGENT_GATEWAY_ERROR';
-        const message =
-          ('error' in errorData && errorData.error?.message)
-          || ('message' in errorData && errorData.message)
-          || 'Agent gateway error';
-        throw new APIClientError(String(message), String(code), 200);
-      }
-
-      yield event;
-    }
   },
 };
 

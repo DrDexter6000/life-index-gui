@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState, type CSSProperties, type MouseEvent as 
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useUIStore } from '@/stores/ui';
 import { useTranslation } from '@/hooks/useTranslation';
-import { useAgentBridgeHealth, useAgentBridgeProbe } from '@/hooks/useAgentBridge';
+import { useHostAgentHealth } from '@/hooks/useHostAgent';
 import { getHostAgentCapability } from '@/lib/health-status';
 import { MobileMenu, type NavItem, type NavItemRenderState, getMobileLinkStyle, getMobileCnStyle, getMobileEnStyle, getActiveDotStyle } from './MobileMenu';
 
@@ -93,14 +93,10 @@ export function TopNavBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { closeMobileMenu, lang, toggleLang, appPhase, setAppPhase, resetHome, setHomeActivated } = useUIStore();
   const { t } = useTranslation();
-  const { data: probeData, isLoading: probeLoading, isError: probeIsError } = useAgentBridgeProbe();
-  const { data: gatewayHealth, isLoading: healthLoading, isError: healthIsError } = useAgentBridgeHealth();
-  const hostCapability = getHostAgentCapability(probeData, {
-    isLoading: probeLoading,
-    isError: probeIsError,
-    gatewayHealth,
-    isHealthLoading: healthLoading,
-    isHealthError: healthIsError,
+  const { data: hostAgentHealth, isLoading: healthLoading, isError: healthIsError } = useHostAgentHealth();
+  const hostCapability = getHostAgentCapability(hostAgentHealth, {
+    isLoading: healthLoading,
+    isError: healthIsError,
   });
 
   const navItemRenderStates = useMemo<NavItemRenderState[]>(() => navItems.map((item) => {

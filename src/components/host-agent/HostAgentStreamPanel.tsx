@@ -28,16 +28,16 @@ export function HostAgentStreamPanel({
       >
         <span className="material-symbols-outlined mb-3 block text-3xl text-[var(--color-coral)]">error_outline</span>
         <h4 className="mb-2 text-sm text-[var(--color-primary)]" style={{ fontFamily: 'var(--font-order)' }}>
-          {t('agentBridgeStreamErrorTitle')}
+          {t('hostAgentStreamErrorTitle')}
         </h4>
         <p className="text-xs text-[var(--color-secondary)]">
-          {error?.message || t('agentBridgeStreamErrorBody')}
+          {error?.message || t('hostAgentStreamErrorBody')}
         </p>
       </div>
     );
   }
 
-  const liveThinking = deltaText.trim() || t('agentBridgeStreamThinkingPending');
+  const liveThinking = deltaText.trim() || t('hostAgentStreamThinkingPending');
 
   return (
     <div
@@ -51,7 +51,7 @@ export function HostAgentStreamPanel({
           className="text-xs text-[var(--color-secondary)]"
           style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em', textTransform: 'uppercase' }}
         >
-          {status === 'connecting' ? t('agentBridgeStreamWarming') : t('agentBridgeStreamThinking')}
+          {status === 'connecting' ? t('hostAgentStreamWarming') : t('hostAgentStreamThinking')}
         </p>
       </div>
 
@@ -64,7 +64,7 @@ export function HostAgentStreamPanel({
           className="mb-2 text-xs text-[var(--color-secondary)]"
           style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em', textTransform: 'uppercase' }}
         >
-          {t('agentBridgeThinkingToggle')}
+          {t('hostAgentThinkingToggle')}
         </p>
         <pre
           className="min-h-6 whitespace-pre-wrap text-sm leading-relaxed text-[var(--color-primary)]"

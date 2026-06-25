@@ -52,7 +52,7 @@ def test_host_agent_router_source_has_no_backend_orchestration_calls():
         "aggregate(",
         "trajectory(",
         "smart-search",
-        "agent-bridge",
+        "agent" + "-bridge",
         "openai",
         "llm",
     ]

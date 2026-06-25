@@ -15,12 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from PIL import Image, UnidentifiedImageError
 
-from backend.adapter.agent_gateway_client import start_gateway_prewarm_task
 from backend.adapter.cli_adapter import CLIAdapter, CLIError
 from backend import config
 from backend.models.response import APIResponse
 from backend.routers import (
-    agent_bridge,
     entities,
     geocode,
     health,
@@ -87,22 +85,7 @@ app.include_router(index_tree.router, prefix="/api")
 app.include_router(entities.router, prefix="/api")
 app.include_router(geocode.router, prefix="/api")
 app.include_router(host_agent.router, prefix="/api")
-app.include_router(agent_bridge.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
-
-
-async def _startup_prewarm_gateway() -> None:
-    """Schedule a background gateway prewarm without blocking server boot.
-
-    Real gateway mode starts a detached ``life-index server`` in the
-    background; the default mock mode is a no-op.  The task is deliberately
-    fire-and-forget so that cold gateway warm-up (~tens of seconds) does not
-    delay health checks or the first GUI page load.
-    """
-    start_gateway_prewarm_task()
-
-
-app.router.add_event_handler("startup", _startup_prewarm_gateway)
 
 
 @app.api_route("/api/attachments/{file_path:path}", methods=["GET", "HEAD"])

@@ -1,4 +1,4 @@
-import type { AgentBridgeGatewayHealthResponse, AgentBridgeProbeResponse, HealthResponse } from './api-client';
+import type { HealthResponse, HostAgentHealthResponse } from './api-client';
 
 export function isSmartCapabilityUnavailable(healthData?: HealthResponse | null): boolean {
   if (!healthData) return false;
@@ -12,12 +12,8 @@ export type HostAgentCapabilityStatus = 'checking' | 'ready' | 'unavailable';
 
 export type HostAgentCapabilityReason =
   | 'ready'
-  | 'probe-loading'
-  | 'probe-unavailable'
-  | 'probe-contract-violation'
-  | 'ack-required'
+  | 'health-loading'
   | 'health-check-failed'
-  | 'check-failed'
   | 'not-ready';
 
 export type AiPlusFeatureKey = 'groundedQuery' | 'smartMetadata';
@@ -51,9 +47,6 @@ export interface HostAgentCapability {
 export interface HostAgentCapabilityOptions {
   isLoading?: boolean;
   isError?: boolean;
-  gatewayHealth?: AgentBridgeGatewayHealthResponse | null;
-  isHealthLoading?: boolean;
-  isHealthError?: boolean;
   features?: Partial<Record<AiPlusFeatureKey, boolean>>;
 }
 
@@ -64,32 +57,18 @@ interface ReadinessBase {
 }
 
 function deriveReadiness(
-  probeData: AgentBridgeProbeResponse | null | undefined,
+  healthData: HostAgentHealthResponse | null | undefined,
   options: HostAgentCapabilityOptions,
 ): ReadinessBase {
-  const healthData = options.gatewayHealth;
-
-  if ((options.isLoading && !probeData) || (options.isHealthLoading && !healthData)) {
-    return { status: 'checking', ready: false, reason: 'probe-loading' };
+  if (options.isLoading && !healthData) {
+    return { status: 'checking', ready: false, reason: 'health-loading' };
   }
 
-  if (options.isError || !probeData) {
-    return { status: 'unavailable', ready: false, reason: 'probe-unavailable' };
-  }
-
-  if (probeData.sends_journal_evidence !== false) {
-    return { status: 'unavailable', ready: false, reason: 'probe-contract-violation' };
-  }
-
-  if (probeData.ack?.data_exposure_ack !== true) {
-    return { status: 'unavailable', ready: false, reason: 'ack-required' };
-  }
-
-  if (options.isHealthError || !healthData) {
+  if (options.isError || !healthData) {
     return { status: 'unavailable', ready: false, reason: 'health-check-failed' };
   }
 
-  if (healthData.running === true && healthData.degraded !== true) {
+  if (healthData.running === true && healthData.ready === true && healthData.degraded !== true) {
     return { status: 'ready', ready: true, reason: 'ready' };
   }
 
@@ -121,10 +100,10 @@ function buildFeature(base: ReadinessBase, enabled: boolean): FeatureCapability 
 }
 
 export function getHostAgentCapability(
-  probeData?: AgentBridgeProbeResponse | null,
+  healthData?: HostAgentHealthResponse | null,
   options: HostAgentCapabilityOptions = {},
 ): HostAgentCapability {
-  const base = deriveReadiness(probeData ?? null, options);
+  const base = deriveReadiness(healthData ?? null, options);
   const enables = resolveEnables(options.features);
 
   const features = {
