@@ -6,6 +6,7 @@ import { useHostAgentHealth } from '@/hooks/useHostAgent';
 import { getHostAgentCapability } from '@/lib/health-status';
 import { MobileMenu, type NavItem, type NavItemRenderState, getMobileLinkStyle, getMobileCnStyle, getMobileEnStyle, getActiveDotStyle } from './MobileMenu';
 import { PublicLinkDialog } from './PublicLinkDialog';
+import { StarweaveConsole, getStarweaveConnectionState } from './StarweaveConsole';
 
 const navItems: NavItem[] = [
   { path: '/home', labelKey: 'navHome', cn: '写入', en: 'WRITE' },
@@ -47,19 +48,14 @@ const DESKTOP_DIVIDER_STYLE = {
   background: 'var(--color-glass-highlight)',
 } as const satisfies CSSProperties;
 
-const DESKTOP_LANGUAGE_SEPARATOR_STYLE = {
-  color: 'var(--color-gold)',
-  margin: '0 0.125rem',
-} as const satisfies CSSProperties;
-
-const SMART_STATUS_DOT_STYLE = {
-  background: 'var(--color-amber)',
-  boxShadow: '0 0 8px var(--color-amber)',
-} as const satisfies CSSProperties;
-
 const AGENT_DISCONNECTED_DOT_STYLE = {
   background: 'var(--color-amber)',
   boxShadow: '0 0 8px var(--color-amber)',
+} as const satisfies CSSProperties;
+
+const AGENT_CHECKING_DOT_STYLE = {
+  background: 'var(--color-muted)',
+  boxShadow: '0 0 8px rgba(255,255,255,0.18)',
 } as const satisfies CSSProperties;
 
 const AGENT_CONNECTED_DOT_STYLE = {
@@ -93,6 +89,7 @@ export function TopNavBar() {
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [publicLinkOpen, setPublicLinkOpen] = useState(false);
+  const [starweaveConsoleOpen, setStarweaveConsoleOpen] = useState(false);
   const { closeMobileMenu, lang, toggleLang, appPhase, setAppPhase, resetHome, setHomeActivated } = useUIStore();
   const { t } = useTranslation();
   const { data: hostAgentHealth, isLoading: healthLoading, isError: healthIsError } = useHostAgentHealth();
@@ -100,6 +97,12 @@ export function TopNavBar() {
     isLoading: healthLoading,
     isError: healthIsError,
   });
+  const starweaveConnectionState = getStarweaveConnectionState(hostCapability);
+  const starweaveDotStyle = starweaveConnectionState === 'online'
+    ? AGENT_CONNECTED_DOT_STYLE
+    : starweaveConnectionState === 'checking'
+      ? AGENT_CHECKING_DOT_STYLE
+      : AGENT_DISCONNECTED_DOT_STYLE;
 
   const navItemRenderStates = useMemo<NavItemRenderState[]>(() => navItems.map((item) => {
     const active = isNavPathActive(item.path, location.pathname);
@@ -125,13 +128,25 @@ export function TopNavBar() {
 
   const handlePublicLinkOpen = useCallback(() => {
     setMobileMenuOpen(false);
+    setStarweaveConsoleOpen(false);
     closeMobileMenu();
     setPublicLinkOpen(true);
   }, [closeMobileMenu]);
 
+  const handleStarweaveToggle = useCallback(() => {
+    setMobileMenuOpen(false);
+    closeMobileMenu();
+    setStarweaveConsoleOpen((open) => !open);
+  }, [closeMobileMenu]);
+
+  const handleStarweaveClose = useCallback(() => {
+    setStarweaveConsoleOpen(false);
+  }, []);
+
   const handleBrandClick = useCallback((e: ReactMouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     setMobileMenuOpen(false);
+    setStarweaveConsoleOpen(false);
     closeMobileMenu();
     setAppPhase('content');
     resetHome();
@@ -143,6 +158,7 @@ export function TopNavBar() {
     if (!path) return;
 
     setMobileMenuOpen(false);
+    setStarweaveConsoleOpen(false);
     closeMobileMenu();
     if (path === '/home') {
       e.preventDefault();
@@ -201,6 +217,7 @@ export function TopNavBar() {
           <div
             className="flex gap-1 items-center rounded-full p-1.5"
             style={DESKTOP_NAV_CAPSULE_STYLE}
+            data-testid="desktop-nav-capsule"
           >
             {navItemRenderStates.map(({ item, active, desktopLinkStyle }) => (
               <Link
@@ -221,46 +238,39 @@ export function TopNavBar() {
                 </span>
               </Link>
             ))}
+          </div>
 
-            <Link
-              to="/maintenance"
+          <div className="w-px h-5" style={DESKTOP_DIVIDER_STYLE} />
+
+          <div className="relative">
+            <button
+              type="button"
               data-testid="smart-capability-status"
-              className="ml-1 inline-flex items-center gap-2 rounded-full border border-[var(--color-cyan)]/20 bg-[var(--color-cyan)]/5 px-3 py-2 text-[0.6875rem] font-medium text-[var(--color-cyan)] transition-colors hover:bg-[var(--color-cyan)]/10 hover:border-[var(--color-cyan)]/35"
-              style={{ fontFamily: 'var(--font-control)', letterSpacing: '0.08em', textTransform: 'uppercase' }}
-              title={t('smartCapabilityStatusHint')}
+              data-starweave-trigger="true"
+              aria-haspopup="dialog"
+              aria-expanded={starweaveConsoleOpen}
+              className="inline-flex items-center gap-2 rounded-full border border-[var(--color-cyan)]/20 bg-[var(--color-cyan)]/5 px-3.5 py-2.5 text-[0.75rem] font-medium text-[var(--color-cyan)] transition-colors hover:bg-[var(--color-cyan)]/10 hover:border-[var(--color-cyan)]/35"
+              style={{ ...DESKTOP_NAV_CAPSULE_STYLE, letterSpacing: '0.08em', textTransform: 'uppercase' }}
+              title={t('starweaveTriggerHint')}
+              onClick={handleStarweaveToggle}
             >
               <span
                 className="h-1.5 w-1.5 rounded-full"
-                style={hostCapability.canSendEvidence ? AGENT_CONNECTED_DOT_STYLE : AGENT_DISCONNECTED_DOT_STYLE}
+                style={starweaveDotStyle}
+                data-testid="smart-capability-dot"
               />
-              <span>AI+</span>
-            </Link>
-
-            {/* Divider */}
-            <div className="w-px h-5 mx-1" style={DESKTOP_DIVIDER_STYLE} />
-
-            {/* Language Toggle */}
-            <button
-              type="button"
-              aria-label={t('switchLang')}
-              className="px-3 py-2.5 text-[0.75rem] font-semibold rounded-full transition-all duration-300 flex items-center gap-1 hover:bg-[var(--color-ether-surface-ghost)] cursor-pointer"
-              onClick={toggleLang}
-            >
-              <span className={lang === 'en' ? 'text-[var(--color-gold)]' : 'text-[var(--color-secondary)]'}>ENG</span>
-              <span style={DESKTOP_LANGUAGE_SEPARATOR_STYLE}>/</span>
-              <span className={lang === 'zh' ? 'text-[var(--color-gold)]' : 'text-[var(--color-secondary)]'}>中</span>
+              <span>{t('starweaveTrigger')}</span>
+              <span className="material-symbols-outlined text-[16px]" aria-hidden="true">expand_more</span>
             </button>
 
-            <button
-              type="button"
-              aria-label={t('publicLinkTitle')}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-amber)]/25 bg-[var(--color-amber)]/5 px-3 py-2 text-[0.6875rem] font-medium text-[var(--color-amber)] transition-colors hover:bg-[var(--color-amber)]/10 hover:border-[var(--color-amber)]/40"
-              style={{ fontFamily: 'var(--font-control)', letterSpacing: '0.08em', textTransform: 'uppercase' }}
-              onClick={handlePublicLinkOpen}
-            >
-              <span className="material-symbols-outlined text-[15px]">public</span>
-              <span>{t('publicLinkNavShort')}</span>
-            </button>
+            <StarweaveConsole
+              isOpen={starweaveConsoleOpen}
+              onClose={handleStarweaveClose}
+              capability={hostCapability}
+              lang={lang}
+              onToggleLang={toggleLang}
+              onPublicLinkClick={handlePublicLinkOpen}
+            />
           </div>
         </div>
 
@@ -276,14 +286,6 @@ export function TopNavBar() {
           <span className="material-symbols-outlined text-[var(--color-primary)]" style={MOBILE_MENU_ICON_STYLE}>
             {mobileMenuOpen ? 'close' : 'menu'}
           </span>
-          {!hostCapability.canSendEvidence && (
-            <span
-              className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full"
-              style={SMART_STATUS_DOT_STYLE}
-              title={t('smartCapabilityStatusHint')}
-              data-testid="smart-capability-mobile-dot"
-            />
-          )}
         </button>
       </div>
 
@@ -293,7 +295,7 @@ export function TopNavBar() {
         isOpen={mobileMenuOpen}
         onClose={handleMobileMenuClose}
         onNavClick={handleNavClick}
-        onPublicLinkClick={handlePublicLinkOpen}
+        capability={hostCapability}
       />
 
       <PublicLinkDialog

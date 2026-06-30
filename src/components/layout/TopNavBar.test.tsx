@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { TopNavBar } from './TopNavBar';
 import { useUIStore } from '@/stores/ui';
@@ -60,6 +60,7 @@ describe('TopNavBar', () => {
   beforeEach(() => {
     useUIStore.getState().setAppPhase('content');
     useUIStore.getState().setHomeActivated(false);
+    useUIStore.getState().setLang('zh');
     mocks.hostAgentHealth.data = readyHostAgentHealth;
     mocks.hostAgentHealth.isLoading = false;
     mocks.hostAgentHealth.isError = false;
@@ -159,7 +160,23 @@ describe('TopNavBar', () => {
     expect(useUIStore.getState().appPhase).toBe('content');
   });
 
-  it('shows the AI+ agent capsule at all times in desktop nav', () => {
+  it('keeps the desktop center capsule limited to the three primary destinations', () => {
+    render(
+      <MemoryRouter initialEntries={['/home']}>
+        <TopNavBar />
+      </MemoryRouter>,
+    );
+
+    const capsule = screen.getByTestId('desktop-nav-capsule');
+    expect(within(capsule).getByRole('link', { name: /写入/i })).toBeInTheDocument();
+    expect(within(capsule).getByRole('link', { name: /搜索/i })).toBeInTheDocument();
+    expect(within(capsule).getByRole('link', { name: /面板/i })).toBeInTheDocument();
+    expect(within(capsule).queryByText('AI+')).not.toBeInTheDocument();
+    expect(within(capsule).queryByText(/ENG|EN/)).not.toBeInTheDocument();
+    expect(within(capsule).queryByText(/公开链接|Public/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the Starweave AI+ capsule as a desktop status and console trigger', () => {
     render(
       <MemoryRouter initialEntries={['/home']}>
         <TopNavBar />
@@ -168,8 +185,10 @@ describe('TopNavBar', () => {
 
     const indicator = screen.getByTestId('smart-capability-status');
     expect(indicator).toBeInTheDocument();
-    expect(indicator).toHaveAttribute('href', '/maintenance');
+    expect(indicator.tagName).toBe('BUTTON');
+    expect(indicator).toHaveAttribute('aria-haspopup', 'dialog');
     expect(indicator.textContent).toContain('AI+');
+    expect(indicator.textContent).toMatch(/星轨|Starweave/);
   });
 
   it('always shows cyan capsule style regardless of connection state', () => {
@@ -193,70 +212,70 @@ describe('TopNavBar', () => {
   describe('Host Agent readiness dot', () => {
     it('shows amber dot when host-agent health is ready but all AI+ features are frozen', () => {
       mocks.hostAgentHealth.data = readyHostAgentHealth;
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-amber)');
+      expect(dot.getAttribute('style')).toContain('var(--color-amber)');
     });
 
     it('shows green dot when at least one AI+ feature is enabled and host-agent health is ready', () => {
       AI_PLUS_FEATURE_ENABLES.groundedQuery = true;
       mocks.hostAgentHealth.data = readyHostAgentHealth;
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-green)');
+      expect(dot.getAttribute('style')).toContain('var(--color-green)');
     });
 
-    it('shows amber dot when host-agent health is loading', () => {
+    it('shows neutral dot when host-agent health is loading', () => {
       mocks.hostAgentHealth.isLoading = true;
       mocks.hostAgentHealth.data = null;
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-amber)');
+      expect(dot.getAttribute('style')).toContain('var(--color-muted)');
     });
 
     it('shows amber dot when host-agent health errors', () => {
       mocks.hostAgentHealth.isError = true;
       mocks.hostAgentHealth.error = new Error('health failed');
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-amber)');
+      expect(dot.getAttribute('style')).toContain('var(--color-amber)');
     });
 
     it('shows amber dot when no host-agent health data exists', () => {
       mocks.hostAgentHealth.data = null;
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-amber)');
+      expect(dot.getAttribute('style')).toContain('var(--color-amber)');
     });
 
     it('shows amber dot when host-agent health is not ready', () => {
@@ -265,15 +284,15 @@ describe('TopNavBar', () => {
         ready: false,
         reason: 'host-agent-unconfigured',
       };
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-amber)');
+      expect(dot.getAttribute('style')).toContain('var(--color-amber)');
     });
 
     it('ignores non-gating host-agent health details when health is ready', () => {
@@ -282,15 +301,15 @@ describe('TopNavBar', () => {
         ...readyHostAgentHealth,
         checks: [{ name: 'runtime-note', status: 'warn', detail: 'diagnostic only' }],
       };
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-green)');
+      expect(dot.getAttribute('style')).toContain('var(--color-green)');
     });
 
     it('shows amber dot when host-agent health is down', () => {
@@ -301,15 +320,15 @@ describe('TopNavBar', () => {
         ready: false,
         reason: 'host-agent-unconfigured',
       };
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-amber)');
+      expect(dot.getAttribute('style')).toContain('var(--color-amber)');
     });
 
     it('shows amber dot when host-agent health is degraded', () => {
@@ -320,15 +339,15 @@ describe('TopNavBar', () => {
         degraded: true,
         reason: 'host-agent-degraded',
       };
-      const { container } = render(
+      render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
         </MemoryRouter>,
       );
 
-      const dot = container.querySelector('[data-testid="smart-capability-status"] span');
+      const dot = screen.getByTestId('smart-capability-dot');
       expect(dot).toBeInTheDocument();
-      expect(dot?.getAttribute('style')).toContain('var(--color-amber)');
+      expect(dot.getAttribute('style')).toContain('var(--color-amber)');
     });
   });
 
@@ -372,8 +391,80 @@ describe('TopNavBar', () => {
     });
   });
 
-  describe('public mobile link control', () => {
+  describe('Starweave console structure', () => {
+    it('opens an online console with public link and language rows without hard-boundary content', async () => {
+      AI_PLUS_FEATURE_ENABLES.groundedQuery = true;
+      render(
+        <MemoryRouter initialEntries={['/home']}>
+          <TopNavBar />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByTestId('smart-capability-status'));
+
+      const console = await screen.findByTestId('starweave-console');
+      expect(within(console).getByText(/在线 ONLINE|ONLINE/i)).toBeInTheDocument();
+      expect(within(console).getByText(/已接入你的宿主 agent|Connected to your host agent/i)).toBeInTheDocument();
+      expect(within(console).getByRole('button', { name: /公网链接|public link/i })).toBeInTheDocument();
+      expect(within(console).getAllByText(/语言|Language/i).length).toBeGreaterThan(0);
+      expect(console.textContent).not.toMatch(/Life Index Mind|model selector|模型选择|LLM 设置|telemetry|遥测|思维共振/i);
+    });
+
+    it('opens an offline console with connection guidance and no public-link trigger', async () => {
+      mocks.hostAgentHealth.data = {
+        ...readyHostAgentHealth,
+        running: false,
+        ready: false,
+        reason: 'host-agent-unconfigured',
+      };
+      render(
+        <MemoryRouter initialEntries={['/home']}>
+          <TopNavBar />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByTestId('smart-capability-status'));
+
+      const console = await screen.findByTestId('starweave-console');
+      expect(within(console).getByText(/离线 OFFLINE|OFFLINE/i)).toBeInTheDocument();
+      expect(within(console).getByText(/未检测到宿主 agent|No host agent detected/i)).toBeInTheDocument();
+      expect(within(console).getByRole('link', { name: /如何连接宿主 agent|How to connect a host agent/i })).toBeInTheDocument();
+      expect(within(console).queryByRole('button', { name: /公网链接|public link/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('mobile M1 menu footer', () => {
+    it('renders an EN single-line Starweave footer with no public-link entry', async () => {
+      AI_PLUS_FEATURE_ENABLES.groundedQuery = true;
+      render(
+        <MemoryRouter initialEntries={['/home']}>
+          <TopNavBar />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /toggle menu|切换菜单/i }));
+
+      const menu = await screen.findByRole('dialog', { name: /navigation menu|导航菜单/i });
+      expect(within(menu).queryByRole('button', { name: /public link/i })).not.toBeInTheDocument();
+      const footer = within(menu).getByTestId('mobile-starweave-footer');
+      const label = within(footer).getByTestId('mobile-starweave-label');
+      const zhButton = within(footer).getByRole('button', { name: /Switch to Chinese|切换到中文/i });
+      const enButton = within(footer).getByRole('button', { name: /Switch to English|切换到英文/i });
+
+      fireEvent.click(enButton);
+
+      expect(footer.className).toContain('flex-nowrap');
+      expect(footer.getAttribute('style')).toContain('white-space: nowrap');
+      await waitFor(() => expect(label).toHaveTextContent('Starweave AI+'));
+      expect(footer.textContent).not.toMatch(/online|offline|connected|disconnected|已连|未连/i);
+      expect(zhButton.getAttribute('style')).toContain('font-size: 0.75rem');
+      expect(enButton.getAttribute('style')).toContain('font-size: 0.75rem');
+    });
+  });
+
+  describe('Starweave console and public link control', () => {
     beforeEach(() => {
+      AI_PLUS_FEATURE_ENABLES.groundedQuery = true;
       mocks.publicLinkAPI.getStatus.mockReset();
       mocks.publicLinkAPI.start.mockReset();
       mocks.publicLinkAPI.events.mockReset();
@@ -397,7 +488,9 @@ describe('TopNavBar', () => {
         </MemoryRouter>,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /公开链接|public link/i }));
+      fireEvent.click(screen.getByTestId('smart-capability-status'));
+      const console = await screen.findByTestId('starweave-console');
+      fireEvent.click(within(console).getByRole('button', { name: /公网链接|public link/i }));
 
       expect(await screen.findByRole('dialog', { name: /公开链接|public link/i })).toBeInTheDocument();
       expect(screen.getByText(/真实日记数据|real journal data/i)).toBeInTheDocument();
@@ -423,7 +516,9 @@ describe('TopNavBar', () => {
         </MemoryRouter>,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /公开链接|public link/i }));
+      fireEvent.click(screen.getByTestId('smart-capability-status'));
+      const console = await screen.findByTestId('starweave-console');
+      fireEvent.click(within(console).getByRole('button', { name: /公网链接|public link/i }));
       fireEvent.click(await screen.findByRole('checkbox', { name: /我确认|I understand/i }));
       fireEvent.click(screen.getByRole('button', { name: /生成公开链接|generate public link/i }));
 
@@ -433,7 +528,8 @@ describe('TopNavBar', () => {
       expect(screen.getByRole('button', { name: /停止公开链接|stop public link/i })).toBeInTheDocument();
     });
 
-    it('streams public-link progress and surfaces fail-closed start errors', async () => {
+    it('streams public-link progress from the Starweave console entry', async () => {
+      mocks.publicLinkAPI.getStatus.mockImplementation(() => new Promise(() => {}));
       mocks.publicLinkAPI.start.mockResolvedValue({
         running: false,
         starting: true,
@@ -449,9 +545,9 @@ describe('TopNavBar', () => {
         processes: [],
         warnings: ['Requires cloudflared.'],
       });
-      let releaseError: (() => void) | undefined;
-      const errorReleased = new Promise<void>((resolve) => {
-        releaseError = resolve;
+      let releaseReady: (() => void) | undefined;
+      const readyReleased = new Promise<void>((resolve) => {
+        releaseReady = resolve;
       });
       mocks.publicLinkAPI.events.mockImplementation(async function* () {
         yield {
@@ -472,23 +568,23 @@ describe('TopNavBar', () => {
             warnings: ['Requires cloudflared.'],
           },
         };
-        await errorReleased;
+        await readyReleased;
         yield {
-          type: 'error',
+          type: 'ready',
           data: {
-            running: false,
+            running: true,
             starting: false,
             startJobId: 'job-1',
-            phase: 'failed',
-            message: 'cloudflared missing',
-            error: { code: 'PUBLIC_LINK_START_FAILED', message: 'cloudflared missing' },
-            tunnelUrl: null,
-            oneTimeUrl: null,
+            phase: 'ready',
+            message: 'Public link ready.',
+            error: null,
+            tunnelUrl: 'https://phone-ready.trycloudflare.com',
+            oneTimeUrl: 'https://phone-ready.trycloudflare.com/link?code=ready',
             qrDataUrl: null,
-            frontendUrl: null,
+            frontendUrl: 'http://127.0.0.1:5173',
             logDir: null,
-            processes: [],
-            warnings: ['Requires cloudflared.'],
+            processes: [{ name: 'cloudflared', pid: 4321 }],
+            warnings: [],
           },
         };
       });
@@ -499,16 +595,17 @@ describe('TopNavBar', () => {
         </MemoryRouter>,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /公开链接|public link/i }));
+      fireEvent.click(screen.getByTestId('smart-capability-status'));
+      const console = await screen.findByTestId('starweave-console');
+      fireEvent.click(within(console).getByRole('button', { name: /公网链接|public link/i }));
       fireEvent.click(await screen.findByRole('checkbox', { name: /我确认|I understand/i }));
       fireEvent.click(screen.getByRole('button', { name: /生成公开链接|generate public link/i }));
 
       expect(await screen.findByText('Waiting for Cloudflare to return a tunnel URL.')).toBeInTheDocument();
-      releaseError?.();
-      await waitFor(() => {
-        expect(document.body.textContent).toContain('cloudflared missing');
-      });
-      expect(screen.queryByRole('button', { name: /停止公开链接|stop public link/i })).not.toBeInTheDocument();
+      expect(mocks.publicLinkAPI.events).toHaveBeenCalledTimes(1);
+      releaseReady?.();
+      expect(await screen.findByText('https://phone-ready.trycloudflare.com/link?code=ready')).toBeInTheDocument();
     });
+
   });
 });

@@ -3,6 +3,8 @@ import { Link } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import { useUIStore } from '@/stores/ui';
 import { useTranslation } from '@/hooks/useTranslation';
+import type { HostAgentCapability } from '@/lib/health-status';
+import { getStarweaveConnectionState } from './StarweaveConsole';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -28,7 +30,7 @@ interface MobileMenuProps {
   isOpen: boolean;
   onClose: () => void;
   onNavClick: (e: ReactMouseEvent<HTMLAnchorElement>) => void;
-  onPublicLinkClick: () => void;
+  capability: HostAgentCapability;
 }
 
 // ─── Style Constants ─────────────────────────────────────────────────────────
@@ -131,12 +133,12 @@ const MOBILE_DIVIDER_STYLE = {
 } as const satisfies CSSProperties;
 
 const MOBILE_LANGUAGE_SECTION_STYLE = {
-  padding: '0.75rem',
+  padding: '0',
   gap: '0.5rem',
 } as const satisfies CSSProperties;
 
 const MOBILE_LANGUAGE_BUTTON_ACTIVE_STYLE = {
-  padding: '0.375rem 0.75rem',
+  padding: '0.375rem 0.625rem',
   fontSize: '0.75rem',
   fontWeight: 500,
   fontFamily: 'var(--font-control)',
@@ -147,7 +149,7 @@ const MOBILE_LANGUAGE_BUTTON_ACTIVE_STYLE = {
 } as const satisfies CSSProperties;
 
 const MOBILE_LANGUAGE_BUTTON_INACTIVE_STYLE = {
-  padding: '0.375rem 0.75rem',
+  padding: '0.375rem 0.625rem',
   fontSize: '0.75rem',
   fontWeight: 500,
   fontFamily: 'var(--font-control)',
@@ -161,6 +163,35 @@ const MOBILE_LANGUAGE_SEPARATOR_STYLE = {
   color: 'var(--color-secondary)',
   fontSize: '0.75rem',
   fontFamily: 'var(--font-control)',
+} as const satisfies CSSProperties;
+
+const MOBILE_FOOTER_STYLE = {
+  padding: '0.75rem 0.625rem 0.25rem',
+  whiteSpace: 'nowrap',
+} as const satisfies CSSProperties;
+
+const MOBILE_STATUS_LABEL_STYLE = {
+  fontSize: '0.75rem',
+  fontWeight: 600,
+  fontFamily: 'var(--font-control)',
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+  color: 'var(--color-primary)',
+} as const satisfies CSSProperties;
+
+const MOBILE_STATUS_DOT_ONLINE_STYLE = {
+  background: 'var(--color-green)',
+  boxShadow: '0 0 8px var(--color-green-60)',
+} as const satisfies CSSProperties;
+
+const MOBILE_STATUS_DOT_OFFLINE_STYLE = {
+  background: 'var(--color-amber)',
+  boxShadow: '0 0 8px var(--color-amber)',
+} as const satisfies CSSProperties;
+
+const MOBILE_STATUS_DOT_CHECKING_STYLE = {
+  background: 'var(--color-muted)',
+  boxShadow: '0 0 8px rgba(255,255,255,0.18)',
 } as const satisfies CSSProperties;
 
 // ─── Re-export style getters for TopNavBar render states ─────────────────────
@@ -192,10 +223,17 @@ export function getMobileLanguageButtonStyle(isActive: boolean): CSSProperties {
  * Handles lightweight overlay, dropdown rendering, focus trap, and language switching.
  * Toggle button remains in TopNavBar.
  */
-export function MobileMenu({ navItemRenderStates, isOpen, onClose, onNavClick, onPublicLinkClick }: MobileMenuProps) {
+export function MobileMenu({ navItemRenderStates, isOpen, onClose, onNavClick, capability }: MobileMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const { lang, toggleLang } = useUIStore();
   const { t } = useTranslation();
+  const starweaveMobileLabel = lang === 'en' ? 'Starweave AI+' : t('starweaveMobileLabel');
+  const starweaveState = getStarweaveConnectionState(capability);
+  const mobileStatusDotStyle = starweaveState === 'online'
+    ? MOBILE_STATUS_DOT_ONLINE_STYLE
+    : starweaveState === 'checking'
+      ? MOBILE_STATUS_DOT_CHECKING_STYLE
+      : MOBILE_STATUS_DOT_OFFLINE_STYLE;
 
   const mobileLanguageStyles = useMemo(() => ({
     zh: getMobileLanguageButtonStyle(lang === 'zh'),
@@ -359,80 +397,80 @@ export function MobileMenu({ navItemRenderStates, isOpen, onClose, onNavClick, o
             {/* Divider */}
             <div style={MOBILE_DIVIDER_STYLE} />
 
-            <button
-              type="button"
-              className="mb-[0.625rem] flex w-full items-center justify-between rounded-[12px] px-[1.125rem] py-3 text-left transition-all duration-200 hover:bg-[var(--color-gold-10)]"
-              onClick={onPublicLinkClick}
+            {/* M1 Footer */}
+            <div
+              className="flex flex-nowrap items-center justify-between gap-3"
+              style={MOBILE_FOOTER_STYLE}
+              data-testid="mobile-starweave-footer"
             >
-              <div className="flex items-center" style={MOBILE_NAV_TEXT_GROUP_STYLE}>
+              <div className="flex min-w-0 flex-shrink items-center gap-2" data-testid="mobile-starweave-status">
                 <span
-                  className="material-symbols-outlined text-[18px] text-[var(--color-gold)]"
-                  aria-hidden="true"
+                  className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                  style={mobileStatusDotStyle}
+                  aria-label={t('starweaveMobileStatusDot')}
+                />
+                <span
+                  className="truncate"
+                  style={MOBILE_STATUS_LABEL_STYLE}
+                  data-testid="mobile-starweave-label"
                 >
-                  public
-                </span>
-                <span className="font-semibold text-[0.9375rem] tracking-[0.08em] text-[var(--color-primary)]">
-                  {t('publicLinkNav')}
-                </span>
-                <span className="text-xs uppercase tracking-wider text-[var(--color-secondary)]">
-                  PUBLIC
+                  {starweaveMobileLabel}
                 </span>
               </div>
-            </button>
 
-            {/* Language Section */}
-            <div
-              className="flex items-center justify-center"
-              style={MOBILE_LANGUAGE_SECTION_STYLE}
-            >
-              <button
-                type="button"
-                aria-label={t('switchToZh')}
-                onClick={() => {
-                  if (lang !== 'zh') toggleLang();
-                }}
-                className="transition-all duration-200"
-                style={mobileLanguageStyles.zh}
-                onMouseEnter={(e) => {
-                  if (lang !== 'zh') {
-                    e.currentTarget.style.background = 'var(--color-white-5)';
-                    e.currentTarget.style.color = 'var(--color-primary)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (lang !== 'zh') {
-                    e.currentTarget.style.background = 'transparent';
-                    e.currentTarget.style.color = 'var(--color-secondary)';
-                  }
-                }}
+              <div
+                className="flex flex-shrink-0 items-center justify-center rounded-full border border-white/[0.08] p-1"
+                style={MOBILE_LANGUAGE_SECTION_STYLE}
+                data-testid="mobile-language-segment"
               >
-                中
-              </button>
-              <span style={MOBILE_LANGUAGE_SEPARATOR_STYLE}>/</span>
-              <button
-                type="button"
-                aria-label={t('switchToEn')}
-                onClick={() => {
-                  if (lang !== 'en') toggleLang();
-                  onClose();
-                }}
-                className="transition-all duration-200"
-                style={mobileLanguageStyles.en}
-                onMouseEnter={(e) => {
-                  if (lang !== 'en') {
-                    e.currentTarget.style.background = 'var(--color-white-5)';
-                    e.currentTarget.style.color = 'var(--color-primary)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (lang !== 'en') {
-                    e.currentTarget.style.background = 'transparent';
-                    e.currentTarget.style.color = 'var(--color-secondary)';
-                  }
-                }}
-              >
-                ENG
-              </button>
+                <button
+                  type="button"
+                  aria-label={t('switchToZh')}
+                  onClick={() => {
+                    if (lang !== 'zh') toggleLang();
+                  }}
+                  className="transition-all duration-200"
+                  style={mobileLanguageStyles.zh}
+                  onMouseEnter={(e) => {
+                    if (lang !== 'zh') {
+                      e.currentTarget.style.background = 'var(--color-white-5)';
+                      e.currentTarget.style.color = 'var(--color-primary)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (lang !== 'zh') {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.color = 'var(--color-secondary)';
+                    }
+                  }}
+                >
+                  中
+                </button>
+                <span style={MOBILE_LANGUAGE_SEPARATOR_STYLE}>/</span>
+                <button
+                  type="button"
+                  aria-label={t('switchToEn')}
+                  onClick={() => {
+                    if (lang !== 'en') toggleLang();
+                  }}
+                  className="transition-all duration-200"
+                  style={mobileLanguageStyles.en}
+                  onMouseEnter={(e) => {
+                    if (lang !== 'en') {
+                      e.currentTarget.style.background = 'var(--color-white-5)';
+                      e.currentTarget.style.color = 'var(--color-primary)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (lang !== 'en') {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.color = 'var(--color-secondary)';
+                    }
+                  }}
+                >
+                  EN
+                </button>
+              </div>
             </div>
           </motion.div>
         )}
