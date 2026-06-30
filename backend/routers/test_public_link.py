@@ -23,7 +23,7 @@ https://phone-test.trycloudflare.com
   "backendUrl": "http://127.0.0.1:8021",
   "bridgeUrl": "http://127.0.0.1:8791",
   "tunnelUrl": "https://phone-test.trycloudflare.com",
-  "logDir": "dev/reports/artifacts/mobile-tunnel-logs/test",
+  "logDir": ".tmp/mobile-tunnel-logs/test",
   "processes": [
     {"name": "bridge", "pid": 4101},
     {"name": "backend", "pid": 4102},

@@ -54,26 +54,28 @@ When no host agent is connected, AI+ honestly appears offline / unavailable. Det
 
 Mobility keeps Life Index useful away from the desk. Your desktop host keeps running the CLI, GUI backend, and optional host agent; your phone can open the GUI through a temporary token-gated public link for travel notes, field observations, and everyday capture.
 
-Public links are explicit risk operations. They require `cloudflared` and the stable mobile server, are protected by a one-time code, and should be stopped when you are done. If generation fails, the GUI fails closed instead of exposing a half-configured link.
+Public links are explicit risk operations. They currently support only `cloudflared` Quick Tunnel: the bundled `scripts/start-mobile-cloudflare-tunnel.ps1` starts the stable mobile server and creates a temporary one-time-code-protected link. SSH/ngrok/frp paths are not supported. Stop the link when you are done. If generation fails, the GUI fails closed instead of exposing a half-configured link.
 
 ## Quick Start
 
 Prerequisites:
 
 - Node.js 22+
-- Python 3.12+
+- Python 3.12-3.13 (`pydantic-core` / `Pillow` wheels are not yet available for Python 3.14 in this pinned dependency set)
 - Life Index CLI installed and runnable locally
 - Optional: a host agent for AI+ grounded answers / smart metadata
-- Optional: `cloudflared` for temporary phone access
+- Optional: `cloudflared` for temporary phone access (the only supported public tunnel)
 
 ```bash
 git clone https://github.com/DrDexter6000/life-index-gui.git
 cd life-index-gui
-npm ci
+npm ci --include=dev
 python -m venv .venv
 source .venv/bin/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
 ```
+
+The local dev, test, and build tools (`vite` / `typescript` / `vitest` / `eslint` / `tailwindcss`) live in devDependencies. `npm ci --include=dev` overrides `NODE_ENV=production` or `npm config omit=dev`, avoiding `vite: not found` or build failures.
 
 Terminal 1, start the backend:
 

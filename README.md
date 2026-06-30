@@ -54,26 +54,28 @@ AI+ 星轨把问题交给你的宿主 agent，由宿主 agent 使用 Life Index 
 
 移动性让 Life Index 不只待在桌面。桌面主机继续运行 CLI、GUI backend 和宿主 agent；你可以通过临时 token-gated 公网链接在手机上打开 GUI，记录路上、旅途和生活现场的片段。
 
-公网链接是显式风险操作：需要本机准备好 `cloudflared` 和稳定移动服务器，链接由一次性 code 保护，用完应立即停止。生成失败时 GUI 会 fail-closed，不暴露半配置入口。
+公网链接是显式风险操作：目前仅支持 `cloudflared` Quick Tunnel，由仓库内 `scripts/start-mobile-cloudflare-tunnel.ps1` 启动稳定移动服务器并生成一次性 code 保护的临时链接；不支持 SSH/ngrok/frp 路径。用完应立即停止。生成失败时 GUI 会 fail-closed，不暴露半配置入口。
 
 ## 快速开始
 
 前置：
 
 - Node.js 22+
-- Python 3.12+
+- Python 3.12-3.13（当前依赖的 `pydantic-core` / `Pillow` 尚未覆盖 Python 3.14 wheel）
 - Life Index CLI 已安装并可在本机运行
 - 可选：宿主 agent，用于 AI+ grounded answer / smart metadata
-- 可选：`cloudflared`，用于临时手机访问
+- 可选：`cloudflared`，用于临时手机访问（唯一支持的公网隧道）
 
 ```bash
 git clone https://github.com/DrDexter6000/life-index-gui.git
 cd life-index-gui
-npm ci
+npm ci --include=dev
 python -m venv .venv
 source .venv/bin/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
 ```
+
+GUI 的本地开发、测试和构建工具（`vite` / `typescript` / `vitest` / `eslint` / `tailwindcss`）都在 devDependencies；`npm ci --include=dev` 可抵消 `NODE_ENV=production` 或 `npm config omit=dev`，避免 `vite: not found` 或构建失败。
 
 终端 1，启动 backend：
 

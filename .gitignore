@@ -75,6 +75,7 @@ public/*.mp4
 /*.png
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 *.pyo

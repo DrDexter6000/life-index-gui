@@ -505,7 +505,7 @@ describe('TopNavBar', () => {
         oneTimeUrl: 'https://phone-test.trycloudflare.com/link?code=abc123',
         qrDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
         frontendUrl: 'http://127.0.0.1:5173',
-        logDir: 'dev/reports/artifacts/mobile-tunnel-logs/test',
+        logDir: '.tmp/mobile-tunnel-logs/test',
         processes: [{ name: 'cloudflared', pid: 4321 }],
         warnings: ['Start Vite with LIFE_INDEX_ALLOW_TRYCLOUDFLARE_HOSTS=1.'],
       });
