@@ -177,7 +177,7 @@ export const CacheDryRunSchema = z
   })
   .passthrough();
 
-// ── Index Tree schemas (M4 — read-only evidence navigation) ───────────────
+// ── Index Tree schemas (canonical read-only evidence navigation) ──────────
 
 export const IndexTreeErrorItemSchema = z.object({
   code: z.string(),
@@ -192,55 +192,57 @@ const IndexTreeEnvelopeBaseShape = {
   errors: z.array(IndexTreeErrorItemSchema),
 };
 
-export const IndexTreeNodeRefSchema = z.object({
-  type: z.string().optional(),
-  node_id: z.string().optional(),
-  id: z.string().optional(),
-  path: z.string().optional(),
-}).passthrough();
-
-export const IndexTreeEntryRefSchema = z.object({
-  relative_path: z.string(),
-  signals: z.record(z.string(), z.array(z.string())).default({}),
-  node_ref: IndexTreeNodeRefSchema.optional(),
-}).passthrough();
-
-export const IndexTreeCoverageStatsSchema = z.object({
-  entries_in_scope: z.number().optional(),
-  present: z.number().optional(),
-  parseable: z.number().optional(),
-}).passthrough();
-
-export const IndexTreeNodeSchema = z.object({
-  node_id: z.string(),
-  level: z.string(),
-  relative_path: z.string().optional(),
-  entry_count: z.number().optional(),
-  freshness: z.string().optional(),
-  entry_refs: z.array(IndexTreeEntryRefSchema).default([]),
-  signal_coverage: z.record(z.string(), IndexTreeCoverageStatsSchema).optional(),
-}).passthrough();
-
-export const IndexTreeNodesDataSchema = z.object({
-  truth_source: z.string(),
-  level: z.string(),
-  nodes: z.array(IndexTreeNodeSchema).default([]),
-}).passthrough();
-
-export const IndexTreeLensItemSchema = z.object({
+export const IndexTreeFacetValueSchema = z.object({
   value: z.string(),
   count: z.number(),
-  node_refs: z.array(IndexTreeNodeRefSchema).default([]),
-  evidence_paths: z.array(z.string()).default([]),
-  freshness: z.array(z.string()).default([]),
+  sample_entry_pointers: z.array(z.string()).default([]),
+  raw_values: z.array(z.string()).default([]),
 }).passthrough();
 
-export const IndexTreeLensDataSchema = z.object({
+export const IndexTreeFacetMenuSchema = z.object({
+  facet: z.string(),
+  value_count: z.number().optional(),
+  values: z.array(IndexTreeFacetValueSchema).default([]),
+}).passthrough();
+
+export const IndexTreeFallbackSchema = z.object({
+  used: z.boolean().default(false),
+  reason: z.string().nullable().optional(),
+  journal_fallback_pointers: z.array(z.string()).default([]),
+}).passthrough();
+
+export const IndexTreeFreshnessSchema = z.object({
+  fresh: z.boolean().optional(),
+  issues: z.array(z.string()).default([]),
+}).passthrough();
+
+export const IndexTreeDiscoverDataSchema = z.object({
   truth_source: z.string(),
   privacy_level: z.string(),
-  signal: z.string(),
-  coverage: IndexTreeCoverageStatsSchema,
-  items: z.array(IndexTreeLensItemSchema).default([]),
+  selection_contract: z.string(),
+  facets: z.record(z.string(), IndexTreeFacetMenuSchema).default({}),
+  freshness: IndexTreeFreshnessSchema.optional(),
+  fallback: IndexTreeFallbackSchema.optional(),
+}).passthrough();
+
+export const IndexTreeEntrySchema = z.object({
+  relative_path: z.string().optional(),
+  title: z.string().optional(),
+}).passthrough();
+
+export const IndexTreeNavigateDataSchema = z.object({
+  truth_source: z.string(),
+  privacy_level: z.string(),
+  entry_pointers: z.array(z.string()).default([]),
+  entries: z.array(IndexTreeEntrySchema).default([]),
+  freshness: IndexTreeFreshnessSchema.optional(),
+  fallback: IndexTreeFallbackSchema.optional(),
+}).passthrough();
+
+export const IndexTreeEnsureDataSchema = z.object({
+  truth_source: z.string().optional(),
+  freshness: IndexTreeFreshnessSchema.optional(),
+  fallback: IndexTreeFallbackSchema,
 }).passthrough();
 
 export const IndexTreeShadowDataSchema = z.object({
@@ -255,16 +257,22 @@ export const IndexTreeShadowDataSchema = z.object({
   default_smart_search_mutated: z.boolean(),
 }).passthrough();
 
-export const IndexTreeNodesResponseSchema = z.object({
+export const IndexTreeDiscoverResponseSchema = z.object({
   ...IndexTreeEnvelopeBaseShape,
-  command: z.literal('index-tree.nodes'),
-  data: IndexTreeNodesDataSchema.nullable(),
+  command: z.literal('index-tree.discover'),
+  data: IndexTreeDiscoverDataSchema,
 }).passthrough();
 
-export const IndexTreeLensResponseSchema = z.object({
+export const IndexTreeNavigateResponseSchema = z.object({
   ...IndexTreeEnvelopeBaseShape,
-  command: z.literal('index-tree.lens'),
-  data: IndexTreeLensDataSchema.nullable(),
+  command: z.literal('index-tree.navigate'),
+  data: IndexTreeNavigateDataSchema,
+}).passthrough();
+
+export const IndexTreeEnsureResponseSchema = z.object({
+  ...IndexTreeEnvelopeBaseShape,
+  command: z.literal('index-tree.ensure'),
+  data: IndexTreeEnsureDataSchema,
 }).passthrough();
 
 export const IndexTreeShadowResponseSchema = z.object({
@@ -427,6 +435,40 @@ export const HostAgentStreamEventSchema = z.union([
   HostAgentStreamFinalEventSchema,
   HostAgentStreamErrorEventSchema,
 ]);
+
+// ── Public link operations ────────────────────────────────────────────────
+
+export const PublicLinkProcessSchema = z.object({
+  name: z.string(),
+  pid: z.number(),
+}).passthrough();
+
+export const PublicLinkErrorSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+}).passthrough();
+
+export const PublicLinkStatusSchema = z.object({
+  running: z.boolean(),
+  tunnelUrl: z.string().nullable(),
+  oneTimeUrl: z.string().nullable().optional(),
+  qrDataUrl: z.string().nullable().optional(),
+  frontendUrl: z.string().nullable(),
+  logDir: z.string().nullable(),
+  processes: z.array(PublicLinkProcessSchema).default([]),
+  startedAt: z.string().nullable().optional(),
+  warnings: z.array(z.string()).default([]),
+  starting: z.boolean().default(false),
+  startJobId: z.string().nullable().optional(),
+  phase: z.string().nullable().optional(),
+  message: z.string().nullable().optional(),
+  error: PublicLinkErrorSchema.nullable().optional(),
+}).passthrough();
+
+export const PublicLinkEventSchema = z.object({
+  type: z.union([z.literal('status'), z.literal('ready'), z.literal('error')]),
+  data: PublicLinkStatusSchema,
+});
 
 // ── Entity schemas (S4 — Entity Graph Inspection) ──────
 

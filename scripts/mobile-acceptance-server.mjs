@@ -36,7 +36,7 @@ function parseArgs(argv) {
   const options = {
     host: '127.0.0.1',
     port: 5173,
-    backendUrl: process.env.BACKEND_URL || 'http://127.0.0.1:8021',
+    backendUrl: process.env.BACKEND_URL || 'http://127.0.0.1:8000',
     distRoot: 'dist',
   };
 
@@ -73,11 +73,24 @@ function writeText(res, status, body) {
 function responseHeaders(headers) {
   const copied = {};
   headers.forEach((value, key) => {
-    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+    const lowerKey = key.toLowerCase();
+    if (!HOP_BY_HOP_HEADERS.has(lowerKey) && lowerKey !== 'set-cookie') {
       copied[key] = value;
     }
   });
   return copied;
+}
+
+function setCookieHeaders(headers) {
+  // headers.getSetCookie() returns an array when available (Node 19.7+/undici).
+  // Fall back to raw header string for older runtimes.
+  if (typeof headers.getSetCookie === 'function') {
+    const cookies = headers.getSetCookie();
+    return cookies;
+  }
+  const raw = headers.get('set-cookie');
+  if (!raw) return [];
+  return Array.isArray(raw) ? raw : [raw];
 }
 
 async function proxyRequest(req, res, backendUrl) {
@@ -104,7 +117,17 @@ async function proxyRequest(req, res, backendUrl) {
   }
 
   const upstream = await fetch(target, init);
-  res.writeHead(upstream.status, responseHeaders(upstream.headers));
+
+  // Preserve Set-Cookie headers separately because responseHeaders() uses
+  // forEach which joins multi-value headers into a single string, breaking
+  // cookie boundaries (each Set-Cookie must be a separate header line).
+  const cookies = setCookieHeaders(upstream.headers);
+  const respHeaders = responseHeaders(upstream.headers);
+  if (cookies.length > 0) {
+    respHeaders['set-cookie'] = cookies;
+  }
+
+  res.writeHead(upstream.status, respHeaders);
   if (!upstream.body) {
     res.end();
     return;
@@ -171,14 +194,14 @@ async function serveStatic(req, res, distRoot) {
 
 export function createMobileAcceptanceServer({
   distRoot = 'dist',
-  backendUrl = process.env.BACKEND_URL || 'http://127.0.0.1:8021',
+  backendUrl = process.env.BACKEND_URL || 'http://127.0.0.1:8000',
 } = {}) {
   const resolvedDistRoot = resolve(distRoot);
 
   return createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-      if (pathname.startsWith('/api') || pathname.startsWith('/attachments')) {
+      if (pathname.startsWith('/api') || pathname.startsWith('/attachments') || pathname.startsWith('/auth')) {
         await proxyRequest(req, res, backendUrl);
         return;
       }
@@ -199,7 +222,7 @@ export function startMobileAcceptanceServer(options) {
   const server = createMobileAcceptanceServer(options);
   server.listen(options.port, options.host, () => {
     console.log(`Mobile acceptance server ready: http://${options.host}:${options.port}`);
-    console.log(`Proxying /api and /attachments to ${options.backendUrl}`);
+    console.log(`Proxying /api, /auth, and /attachments to ${options.backendUrl}`);
   });
   return server;
 }

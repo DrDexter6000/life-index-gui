@@ -279,7 +279,7 @@ describe('HealthCenter', () => {
     expect(screen.getByText('manifest missing')).toBeInTheDocument();
     expect(screen.getByText('vector index stale')).toBeInTheDocument();
     expect(screen.getByText('FTS: 12')).toBeInTheDocument();
-    expect(screen.getByText('Vector: 10')).toBeInTheDocument();
+    expect(screen.queryByText('Vector: 10')).not.toBeInTheDocument();
     expect(screen.getByText('Verify issues: 1')).toBeInTheDocument();
     expect(screen.getByText('Cache dry-run: would rebuild')).toBeInTheDocument();
   });

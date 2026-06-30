@@ -1,89 +1,84 @@
-"""Index Tree router — read-only evidence navigation through CLI envelopes."""
+"""Index Tree router — read-only canonical evidence navigation through CLI envelopes."""
 
-from fastapi import APIRouter, Depends, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from backend.adapter.cli_adapter import CLIAdapter, CLIError
 from backend.models.response import APIResponse
 
 router = APIRouter(prefix="/index-tree", tags=["index-tree"])
 
-ALLOWED_LEVELS = {"all", "root", "year", "month"}
-ALLOWED_SIGNALS = {"topic", "people", "project"}
-
 
 def get_cli() -> CLIAdapter:
     return CLIAdapter()
 
 
-@router.get("/nodes")
-async def get_nodes(
-    level: str = Query("all", description="Tree depth: all|root|year|month"),
+class IndexTreeFilter(BaseModel):
+    facet: str
+    values: list[str] = Field(default_factory=list)
+
+
+class IndexTreeNavigateRequest(BaseModel):
+    dateFrom: str | None = None
+    dateTo: str | None = None
+    filters: list[IndexTreeFilter] = Field(default_factory=list)
+    entityNeighbors: list[str] = Field(default_factory=list)
+    entityRelations: list[str] = Field(default_factory=list)
+    entityMaxHops: int | None = Field(default=None, ge=1, le=5)
+
+
+@router.get("/discover")
+async def discover(
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
+    facet: Annotated[list[str] | None, Query()] = None,
     cli: CLIAdapter = Depends(get_cli),
 ) -> JSONResponse:
-    """Return index-tree nodes from the public CLI envelope."""
-    if level not in ALLOWED_LEVELS:
-        return JSONResponse(
-            status_code=400,
-            content=APIResponse.error_response(
-                "VALIDATION_ERROR",
-                f"Invalid level '{level}'. Allowed: {', '.join(sorted(ALLOWED_LEVELS))}.",
-                details={"allowed": sorted(ALLOWED_LEVELS), "received": level},
-            ).model_dump(),
-        )
-
-    try:
-        payload = await cli.run_json(
-            ["index-tree", "nodes", "--level", level, "--json"]
-        )
-    except CLIError as exc:
-        return JSONResponse(
-            status_code=502,
-            content=APIResponse.error_response(
-                "CLI_ERROR",
-                exc.stderr or "Index tree nodes command failed.",
-            ).model_dump(),
-        )
-
-    return JSONResponse(
-        status_code=200,
-        content=APIResponse.success(payload).model_dump(),
-    )
+    """Return canonical facet menus; host/user chooses values, CLI executes only."""
+    args = ["index-tree", "discover"]
+    _append_date_range(args, date_from, date_to)
+    for item in facet or []:
+        args.extend(["--facet", item])
+    args.append("--json")
+    return await _run_index_tree(args, cli, "Index tree discover command failed.")
 
 
-@router.get("/lens")
-async def get_lens(
-    signal: str = Query(..., description="Signal type: topic|people|project"),
+@router.post("/navigate")
+async def navigate(
+    request: IndexTreeNavigateRequest = Body(default_factory=IndexTreeNavigateRequest),
     cli: CLIAdapter = Depends(get_cli),
 ) -> JSONResponse:
-    """Return index-tree lens from the public CLI envelope."""
-    if signal not in ALLOWED_SIGNALS:
-        return JSONResponse(
-            status_code=400,
-            content=APIResponse.error_response(
-                "VALIDATION_ERROR",
-                f"Invalid signal '{signal}'. Allowed: {', '.join(sorted(ALLOWED_SIGNALS))}.",
-                details={"allowed": sorted(ALLOWED_SIGNALS), "received": signal},
-            ).model_dump(),
-        )
+    """Run deterministic structured navigation over host/user-selected values."""
+    args = ["index-tree", "navigate"]
+    _append_date_range(args, request.dateFrom, request.dateTo)
+    for filter_item in request.filters:
+        if not filter_item.values:
+            continue
+        args.extend(["--filter", f"{filter_item.facet}={'||'.join(filter_item.values)}"])
+    for entity in request.entityNeighbors:
+        args.extend(["--entity-neighbors", entity])
+    for relation in request.entityRelations:
+        args.extend(["--entity-relation", relation])
+    if request.entityMaxHops is not None:
+        args.extend(["--entity-max-hops", str(request.entityMaxHops)])
+    args.append("--json")
+    return await _run_index_tree(args, cli, "Index tree navigate command failed.")
 
-    try:
-        payload = await cli.run_json(
-            ["index-tree", "lens", "--signal", signal, "--json"]
-        )
-    except CLIError as exc:
-        return JSONResponse(
-            status_code=502,
-            content=APIResponse.error_response(
-                "CLI_ERROR",
-                exc.stderr or "Index tree lens command failed.",
-            ).model_dump(),
-        )
 
-    return JSONResponse(
-        status_code=200,
-        content=APIResponse.success(payload).model_dump(),
-    )
+@router.get("/ensure")
+async def ensure(
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
+    cli: CLIAdapter = Depends(get_cli),
+) -> JSONResponse:
+    """Ensure Index B freshness or return CLI journal fallback pointers."""
+    args = ["index-tree", "ensure"]
+    _append_date_range(args, date_from, date_to)
+    args.append("--json")
+    return await _run_index_tree(args, cli, "Index tree ensure command failed.")
 
 
 @router.get("/shadow")
@@ -91,20 +86,33 @@ async def get_shadow(
     query: str = Query(..., description="Shadow diagnostic query"),
     cli: CLIAdapter = Depends(get_cli),
 ) -> JSONResponse:
-    """Return index-tree shadow diagnostics from the public CLI envelope.
+    """Return index-tree shadow diagnostics.
 
     Diagnostic-only. Must not affect default search or smart-search ranking.
     """
+    return await _run_index_tree(
+        ["index-tree", "shadow", "--query", query, "--json"],
+        cli,
+        "Index tree shadow command failed.",
+    )
+
+
+def _append_date_range(args: list[str], date_from: str | None, date_to: str | None) -> None:
+    if date_from:
+        args.extend(["--from", date_from])
+    if date_to:
+        args.extend(["--to", date_to])
+
+
+async def _run_index_tree(args: list[str], cli: CLIAdapter, fallback_message: str) -> JSONResponse:
     try:
-        payload = await cli.run_json(
-            ["index-tree", "shadow", "--query", query, "--json"]
-        )
+        payload = await cli.run_json(args)
     except CLIError as exc:
         return JSONResponse(
             status_code=502,
             content=APIResponse.error_response(
                 "CLI_ERROR",
-                exc.stderr or "Index tree shadow command failed.",
+                exc.stderr or fallback_message,
             ).model_dump(),
         )
 

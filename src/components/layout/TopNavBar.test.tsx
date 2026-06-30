@@ -27,10 +27,21 @@ const mocks = vi.hoisted(() => ({
     isError: false,
     error: null as Error | null,
   },
+  publicLinkAPI: {
+    getStatus: vi.fn(),
+    start: vi.fn(),
+    events: vi.fn(),
+    stop: vi.fn(),
+    exchange: vi.fn(),
+  },
 }));
 
 vi.mock('@/hooks/useHostAgent', () => ({
   useHostAgentHealth: () => mocks.hostAgentHealth,
+}));
+
+vi.mock('@/lib/api-client', () => ({
+  publicLinkAPI: mocks.publicLinkAPI,
 }));
 
 const readyHostAgentHealth = {
@@ -358,6 +369,146 @@ describe('TopNavBar', () => {
 
       expect(container.textContent).not.toContain('Connection refused');
       expect(container.textContent).not.toContain('http://127.0.0.1:8642');
+    });
+  });
+
+  describe('public mobile link control', () => {
+    beforeEach(() => {
+      mocks.publicLinkAPI.getStatus.mockReset();
+      mocks.publicLinkAPI.start.mockReset();
+      mocks.publicLinkAPI.events.mockReset();
+      mocks.publicLinkAPI.stop.mockReset();
+      mocks.publicLinkAPI.getStatus.mockResolvedValue({
+        running: false,
+        tunnelUrl: null,
+        oneTimeUrl: null,
+        qrDataUrl: null,
+        frontendUrl: 'http://127.0.0.1:5173',
+        logDir: null,
+        processes: [],
+        warnings: [],
+      });
+    });
+
+    it('opens a public-link panel and requires risk acknowledgement before start', async () => {
+      render(
+        <MemoryRouter initialEntries={['/home']}>
+          <TopNavBar />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /公开链接|public link/i }));
+
+      expect(await screen.findByRole('dialog', { name: /公开链接|public link/i })).toBeInTheDocument();
+      expect(screen.getByText(/真实日记数据|real journal data/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /生成公开链接|generate public link/i })).toBeDisabled();
+      expect(mocks.publicLinkAPI.start).not.toHaveBeenCalled();
+    });
+
+    it('starts the tunnel after acknowledgement and displays the phone URL', async () => {
+      mocks.publicLinkAPI.start.mockResolvedValue({
+        running: true,
+        tunnelUrl: 'https://phone-test.trycloudflare.com',
+        oneTimeUrl: 'https://phone-test.trycloudflare.com/link?code=abc123',
+        qrDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
+        frontendUrl: 'http://127.0.0.1:5173',
+        logDir: 'dev/reports/artifacts/mobile-tunnel-logs/test',
+        processes: [{ name: 'cloudflared', pid: 4321 }],
+        warnings: ['Start Vite with LIFE_INDEX_ALLOW_TRYCLOUDFLARE_HOSTS=1.'],
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/home']}>
+          <TopNavBar />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /公开链接|public link/i }));
+      fireEvent.click(await screen.findByRole('checkbox', { name: /我确认|I understand/i }));
+      fireEvent.click(screen.getByRole('button', { name: /生成公开链接|generate public link/i }));
+
+      expect(mocks.publicLinkAPI.start).toHaveBeenCalledWith({ acceptRisk: true });
+      expect(await screen.findByText('https://phone-test.trycloudflare.com/link?code=abc123')).toBeInTheDocument();
+      expect(screen.getByAltText(/QR code|二维码/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /停止公开链接|stop public link/i })).toBeInTheDocument();
+    });
+
+    it('streams public-link progress and surfaces fail-closed start errors', async () => {
+      mocks.publicLinkAPI.start.mockResolvedValue({
+        running: false,
+        starting: true,
+        startJobId: 'job-1',
+        phase: 'waiting_for_tunnel',
+        message: 'Public link start requested.',
+        error: null,
+        tunnelUrl: null,
+        oneTimeUrl: null,
+        qrDataUrl: null,
+        frontendUrl: null,
+        logDir: null,
+        processes: [],
+        warnings: ['Requires cloudflared.'],
+      });
+      let releaseError: (() => void) | undefined;
+      const errorReleased = new Promise<void>((resolve) => {
+        releaseError = resolve;
+      });
+      mocks.publicLinkAPI.events.mockImplementation(async function* () {
+        yield {
+          type: 'status',
+          data: {
+            running: false,
+            starting: true,
+            startJobId: 'job-1',
+            phase: 'waiting_for_tunnel',
+            message: 'Waiting for Cloudflare to return a tunnel URL.',
+            error: null,
+            tunnelUrl: null,
+            oneTimeUrl: null,
+            qrDataUrl: null,
+            frontendUrl: null,
+            logDir: null,
+            processes: [],
+            warnings: ['Requires cloudflared.'],
+          },
+        };
+        await errorReleased;
+        yield {
+          type: 'error',
+          data: {
+            running: false,
+            starting: false,
+            startJobId: 'job-1',
+            phase: 'failed',
+            message: 'cloudflared missing',
+            error: { code: 'PUBLIC_LINK_START_FAILED', message: 'cloudflared missing' },
+            tunnelUrl: null,
+            oneTimeUrl: null,
+            qrDataUrl: null,
+            frontendUrl: null,
+            logDir: null,
+            processes: [],
+            warnings: ['Requires cloudflared.'],
+          },
+        };
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/home']}>
+          <TopNavBar />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /公开链接|public link/i }));
+      fireEvent.click(await screen.findByRole('checkbox', { name: /我确认|I understand/i }));
+      fireEvent.click(screen.getByRole('button', { name: /生成公开链接|generate public link/i }));
+
+      expect(await screen.findByText('Waiting for Cloudflare to return a tunnel URL.')).toBeInTheDocument();
+      releaseError?.();
+      await waitFor(() => {
+        expect(document.body.textContent).toContain('cloudflared missing');
+      });
+      expect(screen.queryByRole('button', { name: /停止公开链接|stop public link/i })).not.toBeInTheDocument();
     });
   });
 });

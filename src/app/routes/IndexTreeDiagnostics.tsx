@@ -4,52 +4,62 @@ import { GlassCard } from '@/components/celestial/GlassCard';
 import { CelestialLoader } from '@/components/celestial/CelestialLoader';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
-  useIndexTreeNodes,
-  useIndexTreeLens,
+  useIndexTreeDiscover,
+  useIndexTreeEnsure,
+  useIndexTreeNavigate,
   useIndexTreeShadow,
 } from '@/hooks/useIndexTree';
-import type { IndexTreeSignal } from '@/lib/api-client';
+import type { IndexTreeFacet } from '@/lib/api-client';
 
-const SIGNAL_OPTIONS: Array<{ value: IndexTreeSignal; labelKey: string }> = [
-  { value: 'topic', labelKey: 'indexTreeLensSignalTopic' },
-  { value: 'people', labelKey: 'indexTreeLensSignalPeople' },
-  { value: 'project', labelKey: 'indexTreeLensSignalProject' },
+const FACET_OPTIONS: Array<{ value: IndexTreeFacet; labelKey: string }> = [
+  { value: 'topic', labelKey: 'indexTreeFacetTopic' },
+  { value: 'people', labelKey: 'indexTreeFacetPeople' },
+  { value: 'project', labelKey: 'indexTreeFacetProject' },
 ];
 
 function basename(path: string) {
   return path.split('/').filter(Boolean).pop() ?? path;
 }
 
-function coverageSummary(signal: string, coverage: { entries_in_scope?: number; present?: number }) {
-  const present = coverage.present ?? 0;
-  const total = coverage.entries_in_scope ?? 0;
-  return `${signal}: ${present}/${total}`;
-}
-
 /**
- * Read-only Index Tree evidence navigation diagnostics.
+ * Canonical Index Tree evidence navigation diagnostics.
  *
- * Lens and shadow output are navigation/diagnostics only, never truth claims
- * or search-ranking inputs.
+ * Discover presents deterministic facet menus. Navigate runs only after a user
+ * picks values. Shadow stays diagnostic-only and never feeds search ranking.
  */
 export default function IndexTreeDiagnostics() {
   const { t } = useTranslation();
-  const [signal, setSignal] = useState<IndexTreeSignal>('topic');
+  const [facet, setFacet] = useState<IndexTreeFacet>('topic');
+  const [selectedValue, setSelectedValue] = useState('');
   const [shadowDraft, setShadowDraft] = useState('');
   const [shadowQuery, setShadowQuery] = useState('');
 
-  const nodesQuery = useIndexTreeNodes('month');
-  const lensQuery = useIndexTreeLens(signal);
+  const discoverQuery = useIndexTreeDiscover({ facets: [facet] });
+  const isStale = discoverQuery.data?.data?.freshness?.fresh === false;
+  const ensureQuery = useIndexTreeEnsure({}, isStale);
+  const navigateQuery = useIndexTreeNavigate({
+    filters: selectedValue ? [{ facet, values: [selectedValue] }] : [],
+  });
   const shadowDiagnosticsQuery = useIndexTreeShadow(shadowQuery);
 
-  const nodes = nodesQuery.data?.data?.nodes ?? [];
-  const lensItems = lensQuery.data?.data?.items ?? [];
+  const discoverData = discoverQuery.data?.data;
+  const facetMenu = discoverData?.facets?.[facet];
+  const navigateData = navigateQuery.data?.data;
+  const ensureFallback = ensureQuery.data?.data?.fallback;
   const shadowData = shadowDiagnosticsQuery.data?.data;
+
+  function handleFacetChange(nextFacet: IndexTreeFacet) {
+    setFacet(nextFacet);
+    setSelectedValue('');
+  }
 
   function handleShadowSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setShadowQuery(shadowDraft.trim());
   }
+
+  const entries = navigateData?.entries ?? [];
+  const entryPointers = navigateData?.entry_pointers ?? [];
 
   return (
     <div className="max-w-[900px] mx-auto px-6" data-testid="index-tree-diagnostics-page">
@@ -66,93 +76,15 @@ export default function IndexTreeDiagnostics() {
       </section>
 
       <GlassCard className="p-6 mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <span className="material-symbols-outlined text-lg" style={{ color: 'var(--color-gold)' }}>
-            account_tree
-          </span>
-          <h2 className="text-base font-semibold text-[var(--color-primary)]">{t('indexTreeNodes')}</h2>
-        </div>
-
-        {nodesQuery.isLoading && (
-          <div className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
-            <CelestialLoader size="sm" />
-            <span>{t('indexTreeLoading')}</span>
-          </div>
-        )}
-
-        {nodesQuery.isError && (
-          <p className="text-sm text-[var(--color-muted)]">{t('indexTreeUnavailable')}</p>
-        )}
-
-        {!nodesQuery.isLoading && !nodesQuery.isError && (
-          <div className="space-y-4">
-            {nodes.map((node) => (
-              <div
-                key={node.node_id}
-                className="rounded-lg border border-white/[0.08] p-4 bg-[var(--color-ether-surface-ghost)]"
-                data-testid="index-tree-node-card"
-              >
-                <div className="flex flex-wrap items-center gap-3 mb-3">
-                  <span className="font-mono text-sm text-[var(--color-primary)]">{node.node_id}</span>
-                  {node.freshness && (
-                    <span className="text-xs text-[var(--color-gold)]">
-                      {t('indexTreeFreshness')}: {node.freshness}
-                    </span>
-                  )}
-                  <span className="text-xs text-[var(--color-secondary)]">
-                    {t('indexTreeEntryCount')}: {node.entry_count ?? 0}
-                  </span>
-                </div>
-
-                {node.signal_coverage && (
-                  <div className="mb-3">
-                    <div className="text-xs uppercase tracking-[0.08em] text-[var(--color-muted)] mb-1">
-                      {t('indexTreeSignalCoverage')}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(node.signal_coverage).map(([key, coverage]) => (
-                        <span key={key} className="text-sm text-[var(--color-secondary)]">
-                          {coverageSummary(key, coverage)}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {node.entry_refs.length > 0 && (
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.08em] text-[var(--color-muted)] mb-1">
-                      {t('indexTreeEvidenceRefs')}
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      {node.entry_refs.map((entry) => (
-                        <Link
-                          key={entry.relative_path}
-                          to={`/journal/${entry.relative_path}`}
-                          className="text-sm text-[var(--color-cyan)] hover:text-[var(--color-gold)] transition-colors"
-                        >
-                          {basename(entry.relative_path)}
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </GlassCard>
-
-      <GlassCard className="p-6 mb-6">
         <div className="flex flex-wrap items-center gap-3 mb-3">
-          <h2 className="text-base font-semibold text-[var(--color-primary)]">{t('indexTreeLens')}</h2>
+          <h2 className="text-base font-semibold text-[var(--color-primary)]">{t('indexTreeDiscover')}</h2>
           <div className="flex gap-2">
-            {SIGNAL_OPTIONS.map((option) => (
+            {FACET_OPTIONS.map((option) => (
               <button
                 key={option.value}
                 type="button"
-                onClick={() => setSignal(option.value)}
-                aria-pressed={signal === option.value}
+                onClick={() => handleFacetChange(option.value)}
+                aria-pressed={facet === option.value}
                 className="px-3 py-1 rounded-lg text-xs border border-white/[0.08] text-[var(--color-secondary)] aria-pressed:text-[var(--color-gold)]"
               >
                 {t(option.labelKey)}
@@ -160,32 +92,108 @@ export default function IndexTreeDiagnostics() {
             ))}
           </div>
         </div>
-        <p className="text-sm text-[var(--color-muted)] mb-4">{t('indexTreeLensDesc')}</p>
+        <p className="text-sm text-[var(--color-muted)] mb-4">{t('indexTreeDiscoverDesc')}</p>
 
-        {lensQuery.isError ? (
+        {discoverQuery.isLoading && (
+          <div className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
+            <CelestialLoader size="sm" />
+            <span>{t('indexTreeLoading')}</span>
+          </div>
+        )}
+
+        {discoverQuery.isError && (
           <p className="text-sm text-[var(--color-muted)]">{t('indexTreeUnavailable')}</p>
-        ) : (
+        )}
+
+        {!discoverQuery.isLoading && !discoverQuery.isError && (
           <div className="space-y-3">
-            {lensItems.map((item) => (
-              <div
-                key={item.value}
-                data-testid="index-tree-lens-item"
-                className="rounded-lg border border-white/[0.08] p-4 bg-[var(--color-ether-surface-ghost)]"
+            {facetMenu?.values.map((value) => (
+              <button
+                key={value.value}
+                type="button"
+                data-testid="index-tree-discover-value"
+                onClick={() => setSelectedValue(value.value)}
+                aria-pressed={selectedValue === value.value}
+                className="w-full text-left rounded-lg border border-white/[0.08] p-4 bg-[var(--color-ether-surface-ghost)] text-[var(--color-secondary)] transition-colors hover:border-[var(--color-gold)] aria-pressed:border-[var(--color-gold)]"
               >
-                <div className="flex items-center justify-between gap-3 mb-2">
-                  <span className="text-sm font-medium text-[var(--color-primary)]">{item.value}</span>
-                  <span className="text-xs text-[var(--color-secondary)]">{item.count}</span>
-                </div>
-                <div className="text-sm text-[var(--color-secondary)]">
-                  {item.node_refs.map((ref) => ref.node_id ?? ref.id ?? ref.path ?? ref.type).filter(Boolean).join(', ')}
-                </div>
-                <div className="mt-2 flex flex-col gap-1">
-                  {item.evidence_paths.map((path) => (
-                    <span key={path} className="text-xs text-[var(--color-muted)]">{path}</span>
+                <span className="flex items-center justify-between gap-3 mb-2">
+                  <span className="text-sm font-medium text-[var(--color-primary)]">{value.value}</span>
+                  <span className="text-xs text-[var(--color-secondary)]">{value.count}</span>
+                </span>
+                <span className="flex flex-col gap-1 text-xs text-[var(--color-muted)]">
+                  {value.sample_entry_pointers.map((pointer) => (
+                    <span key={pointer}>{pointer}</span>
                   ))}
-                </div>
-              </div>
+                </span>
+              </button>
             ))}
+          </div>
+        )}
+
+        {isStale && ensureFallback && (
+          <div
+            data-testid="index-tree-fallback"
+            className="mt-4 rounded-lg border border-[var(--color-gold)]/30 p-4 bg-[var(--color-ether-surface-ghost)] text-sm text-[var(--color-secondary)]"
+          >
+            <div className="font-medium text-[var(--color-primary)] mb-2">{t('indexTreeFallback')}</div>
+            <div>{ensureFallback.reason ?? 'fallback'}</div>
+            <div className="mt-2 flex flex-col gap-1">
+              {ensureFallback.journal_fallback_pointers.map((pointer) => (
+                <span key={pointer}>{pointer}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </GlassCard>
+
+      <GlassCard className="p-6 mb-6">
+        <h2 className="text-base font-semibold text-[var(--color-primary)] mb-2">{t('indexTreeNavigate')}</h2>
+        <p className="text-sm text-[var(--color-muted)] mb-4">{t('indexTreeNavigateDesc')}</p>
+
+        {navigateQuery.isError && (
+          <p className="text-sm text-[var(--color-muted)]">{t('indexTreeUnavailable')}</p>
+        )}
+
+        {selectedValue && navigateData && (
+          <div
+            data-testid="index-tree-navigate-result"
+            className="rounded-lg border border-white/[0.08] p-4 bg-[var(--color-ether-surface-ghost)]"
+          >
+            {entries.length > 0 && (
+              <div className="space-y-3">
+                {entries.map((entry, index) => {
+                  const pointer = entry.relative_path ?? entryPointers[index];
+                  if (!pointer) return null;
+                  return (
+                    <div key={pointer} className="text-sm text-[var(--color-secondary)]">
+                      {entry.title && (
+                        <div className="font-medium text-[var(--color-primary)] mb-1">{entry.title}</div>
+                      )}
+                      <Link
+                        to={`/journal/${pointer}`}
+                        className="text-[var(--color-cyan)] hover:text-[var(--color-gold)] transition-colors"
+                      >
+                        {basename(pointer)}
+                      </Link>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {entries.length === 0 && (
+              <div className="flex flex-col gap-1">
+                {entryPointers.map((pointer) => (
+                  <Link
+                    key={pointer}
+                    to={`/journal/${pointer}`}
+                    className="text-sm text-[var(--color-cyan)] hover:text-[var(--color-gold)] transition-colors"
+                  >
+                    {basename(pointer)}
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </GlassCard>

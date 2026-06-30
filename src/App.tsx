@@ -16,6 +16,7 @@ const EntityGraph = lazy(() => import('@/app/routes/EntityGraph'));
 const IndexDiagnostics = lazy(() => import('@/app/routes/IndexDiagnostics'));
 const IndexTreeDiagnostics = lazy(() => import('@/app/routes/IndexTreeDiagnostics'));
 const ImportWorkflow = lazy(() => import('@/app/routes/ImportWorkflow'));
+const PublicLinkExchange = lazy(() => import('@/app/routes/PublicLinkExchange'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -58,6 +59,7 @@ export default function App() {
               } />
               <Route path="/import" element={<ImportWorkflow />} />
               <Route path="/onboarding" element={<EmptyState />} />
+              <Route path="/link" element={<PublicLinkExchange />} />
             </Route>
           </Routes>
         </Suspense>

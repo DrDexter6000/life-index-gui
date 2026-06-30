@@ -1,4 +1,4 @@
-"""RED contract tests for the future read-only index-tree backend consumer."""
+"""Contract tests for canonical read-only index-tree backend consumer."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -21,112 +21,207 @@ def _envelope(command: str, data: dict) -> dict:
     }
 
 
-def test_nodes_month_level_returns_cli_envelope():
+def test_discover_topic_facet_returns_cli_envelope():
     payload = _envelope(
-        "index-tree.nodes",
-        {
-            "truth_source": "journals",
-            "level": "month",
-            "nodes": [
-                {
-                    "node_id": "month:2026-05",
-                    "level": "month",
-                    "relative_path": "Journals/2026/05/index_2026-05.md",
-                    "entry_count": 1,
-                    "freshness": "fresh",
-                    "entry_refs": [
-                        {
-                            "relative_path": "Journals/2026/05/life-index_2026-05-01_001.md",
-                            "signals": {"topic": ["work"]},
-                        }
-                    ],
-                    "signal_coverage": {
-                        "topic": {
-                            "entries_in_scope": 1,
-                            "present": 1,
-                            "parseable": 1,
-                        }
-                    },
-                }
-            ],
-        },
-    )
-
-    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
-        run_json.return_value = payload
-        response = client.get("/api/index-tree/nodes", params={"level": "month"})
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"]["schema_version"] == "m31.index_tree.v1"
-    assert body["data"]["command"] == "index-tree.nodes"
-    assert body["data"]["success"] is True
-    assert body["data"]["data"]["nodes"][0]["freshness"] == "fresh"
-    assert body["data"]["errors"] == []
-    run_json.assert_awaited_once_with(
-        ["index-tree", "nodes", "--level", "month", "--json"]
-    )
-
-
-def test_nodes_invalid_level_returns_structured_error_without_cli_call():
-    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
-        response = client.get("/api/index-tree/nodes", params={"level": "day"})
-
-    assert response.status_code == 400
-    body = response.json()
-    assert body["ok"] is False
-    assert body["error"]["code"] == "VALIDATION_ERROR"
-    run_json.assert_not_awaited()
-
-
-def test_lens_topic_signal_returns_cli_envelope():
-    payload = _envelope(
-        "index-tree.lens",
+        "index-tree.discover",
         {
             "truth_source": "journals",
             "privacy_level": "same_as_journals",
-            "signal": "topic",
-            "coverage": {"entries_in_scope": 2, "present": 2, "parseable": 2},
-            "items": [
-                {
-                    "value": "work",
-                    "count": 1,
-                    "node_refs": [{"type": "month", "node_id": "month:2026-05"}],
-                    "evidence_paths": [
-                        "Journals/2026/05/life-index_2026-05-01_001.md"
+            "selection_contract": "host_agent_selects_values; tool_executes_only",
+            "facets": {
+                "topic": {
+                    "facet": "topic",
+                    "value_count": 1,
+                    "values": [
+                        {
+                            "value": "work",
+                            "count": 2,
+                            "sample_entry_pointers": [
+                                "Journals/2026/05/life-index_2026-05-01_001.md"
+                            ],
+                            "raw_values": ["work"],
+                        }
                     ],
-                    "freshness": ["fresh"],
                 }
-            ],
+            },
+            "freshness": {"fresh": True},
+            "fallback": {"used": False, "reason": None},
         },
     )
 
     with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
         run_json.return_value = payload
-        response = client.get("/api/index-tree/lens", params={"signal": "topic"})
+        response = client.get("/api/index-tree/discover", params={"facet": "topic"})
 
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
     assert body["data"]["schema_version"] == "m31.index_tree.v1"
-    assert body["data"]["command"] == "index-tree.lens"
-    assert body["data"]["data"]["privacy_level"] == "same_as_journals"
-    assert body["data"]["data"]["items"][0]["evidence_paths"]
+    assert body["data"]["command"] == "index-tree.discover"
+    assert body["data"]["data"]["selection_contract"] == (
+        "host_agent_selects_values; tool_executes_only"
+    )
+    assert body["data"]["data"]["facets"]["topic"]["values"][0]["value"] == "work"
     run_json.assert_awaited_once_with(
-        ["index-tree", "lens", "--signal", "topic", "--json"]
+        ["index-tree", "discover", "--facet", "topic", "--json"]
     )
 
 
-def test_lens_invalid_signal_returns_structured_error_without_cli_call():
-    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
-        response = client.get("/api/index-tree/lens", params={"signal": "mood"})
+def test_discover_date_range_and_multiple_facets_are_passed_through():
+    payload = _envelope(
+        "index-tree.discover",
+        {
+            "truth_source": "journals",
+            "privacy_level": "same_as_journals",
+            "selection_contract": "host_agent_selects_values; tool_executes_only",
+            "facets": {},
+            "freshness": {"fresh": True},
+            "fallback": {"used": False, "reason": None},
+        },
+    )
 
-    assert response.status_code == 400
+    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
+        run_json.return_value = payload
+        response = client.get(
+            "/api/index-tree/discover?from=2026-03&to=2026-04&facet=topic&facet=project"
+        )
+
+    assert response.status_code == 200
+    run_json.assert_awaited_once_with(
+        [
+            "index-tree",
+            "discover",
+            "--from",
+            "2026-03",
+            "--to",
+            "2026-04",
+            "--facet",
+            "topic",
+            "--facet",
+            "project",
+            "--json",
+        ]
+    )
+
+
+def test_navigate_filter_returns_cli_envelope():
+    payload = _envelope(
+        "index-tree.navigate",
+        {
+            "truth_source": "journals",
+            "privacy_level": "same_as_journals",
+            "operation_model": "deterministic_navigation.v1",
+            "operations": [{"type": "facet_filter", "facet": "topic"}],
+            "entry_pointers": [
+                "Journals/2026/05/life-index_2026-05-01_001.md"
+            ],
+            "entries": [
+                {
+                    "relative_path": "Journals/2026/05/life-index_2026-05-01_001.md",
+                    "title": "Work note",
+                }
+            ],
+            "freshness": {"fresh": True},
+            "fallback": {"used": False, "reason": None},
+        },
+    )
+
+    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
+        run_json.return_value = payload
+        response = client.post(
+            "/api/index-tree/navigate",
+            json={"filters": [{"facet": "topic", "values": ["work"]}]},
+        )
+
+    assert response.status_code == 200
     body = response.json()
-    assert body["ok"] is False
-    assert body["error"]["code"] == "VALIDATION_ERROR"
-    run_json.assert_not_awaited()
+    assert body["ok"] is True
+    assert body["data"]["command"] == "index-tree.navigate"
+    assert body["data"]["data"]["entry_pointers"][0].endswith("001.md")
+    run_json.assert_awaited_once_with(
+        ["index-tree", "navigate", "--filter", "topic=work", "--json"]
+    )
+
+
+def test_navigate_multi_value_filter_and_entity_options_are_passed_through():
+    payload = _envelope(
+        "index-tree.navigate",
+        {
+            "truth_source": "journals",
+            "privacy_level": "same_as_journals",
+            "entry_pointers": [],
+            "entries": [],
+            "freshness": {"fresh": True},
+            "fallback": {"used": False, "reason": None},
+        },
+    )
+
+    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
+        run_json.return_value = payload
+        response = client.post(
+            "/api/index-tree/navigate",
+            json={
+                "dateFrom": "2026-03",
+                "dateTo": "2026-04",
+                "filters": [{"facet": "topic", "values": ["work", "life"]}],
+                "entityNeighbors": ["entity-life-index"],
+                "entityRelations": ["related_to"],
+                "entityMaxHops": 2,
+            },
+        )
+
+    assert response.status_code == 200
+    run_json.assert_awaited_once_with(
+        [
+            "index-tree",
+            "navigate",
+            "--from",
+            "2026-03",
+            "--to",
+            "2026-04",
+            "--filter",
+            "topic=work||life",
+            "--entity-neighbors",
+            "entity-life-index",
+            "--entity-relation",
+            "related_to",
+            "--entity-max-hops",
+            "2",
+            "--json",
+        ]
+    )
+
+
+def test_ensure_stale_index_returns_journal_fallback_without_500():
+    payload = _envelope(
+        "index-tree.ensure",
+        {
+            "truth_source": "journals",
+            "source": "journal-fallback",
+            "freshness": {"fresh": False, "issues": ["index-b stale"]},
+            "fallback": {
+                "used": True,
+                "reason": "index_b_stale",
+                "journal_fallback_pointers": [
+                    "Journals/2026/05/life-index_2026-05-01_001.md"
+                ],
+            },
+        },
+    )
+
+    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
+        run_json.return_value = payload
+        response = client.get("/api/index-tree/ensure", params={"from": "2026-05"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["data"]["command"] == "index-tree.ensure"
+    assert body["data"]["data"]["freshness"]["fresh"] is False
+    assert body["data"]["data"]["fallback"]["used"] is True
+    run_json.assert_awaited_once_with(
+        ["index-tree", "ensure", "--from", "2026-05", "--json"]
+    )
 
 
 def test_shadow_query_returns_diagnostic_only_envelope():
@@ -166,32 +261,10 @@ def test_shadow_query_returns_diagnostic_only_envelope():
     )
 
 
-def test_nodes_cli_failure_returns_structured_error():
+def test_canonical_cli_failure_returns_structured_error():
     with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
         run_json.side_effect = CLIError(1, "index-tree command failed")
-        response = client.get("/api/index-tree/nodes", params={"level": "month"})
-
-    assert response.status_code == 502
-    body = response.json()
-    assert body["ok"] is False
-    assert body["error"]["code"] == "CLI_ERROR"
-
-
-def test_lens_cli_failure_returns_structured_error():
-    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
-        run_json.side_effect = CLIError(1, "index-tree lens command failed")
-        response = client.get("/api/index-tree/lens", params={"signal": "topic"})
-
-    assert response.status_code == 502
-    body = response.json()
-    assert body["ok"] is False
-    assert body["error"]["code"] == "CLI_ERROR"
-
-
-def test_shadow_cli_failure_returns_structured_error():
-    with patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json:
-        run_json.side_effect = CLIError(1, "index-tree shadow command failed")
-        response = client.get("/api/index-tree/shadow", params={"query": "memories"})
+        response = client.get("/api/index-tree/discover", params={"facet": "topic"})
 
     assert response.status_code == 502
     body = response.json()

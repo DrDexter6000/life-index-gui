@@ -37,6 +37,18 @@ const backend = createServer((req, res) => {
     setImmediate(() => res.destroy(new Error('upstream closed')));
     return;
   }
+  // Auth exchange endpoint: sets a session cookie and redirects.
+  if (req.url === '/auth/exchange' && req.method === 'POST') {
+    res.writeHead(302, {
+      'location': '/',
+      'set-cookie': [
+        'session_token=abc123; Path=/; HttpOnly; Secure; SameSite=Lax',
+        'other_cookie=foo; Path=/',
+      ],
+    });
+    res.end();
+    return;
+  }
   res.writeHead(404);
   res.end('not found');
 });
@@ -69,6 +81,24 @@ try {
   assert.equal(attachmentResponse.status, 200);
   assert.equal(await attachmentResponse.text(), 'image-bytes');
 
+  // --- /auth/exchange is proxied and Set-Cookie survives ---
+  const authResponse = await fetch(`${baseUrl}/auth/exchange`, { method: 'POST', redirect: 'manual' });
+  assert.equal(authResponse.status, 302);
+  assert.equal(authResponse.headers.get('location'), '/');
+  // The backend sets two Set-Cookie headers; both must survive the proxy.
+  const setCookieHeader = authResponse.headers.getSetCookie?.() ?? [];
+  assert.ok(setCookieHeader.length >= 2, 'At least two Set-Cookie headers should survive');
+  const cookieValues = setCookieHeader.map(String);
+  assert.ok(cookieValues.some((c) => c.includes('session_token=abc123')),
+    'session_token cookie should survive proxy');
+  assert.ok(cookieValues.some((c) => c.includes('other_cookie=foo')),
+    'other_cookie should survive proxy');
+  assert.ok(cookieValues.some((c) => c.includes('HttpOnly')),
+    'HttpOnly flag should be preserved');
+  assert.ok(cookieValues.some((c) => c.includes('SameSite=Lax')),
+    'SameSite=Lax should be preserved');
+
+  // Unstable stream
   let uncaught = null;
   const onUncaught = (error) => {
     uncaught = error;

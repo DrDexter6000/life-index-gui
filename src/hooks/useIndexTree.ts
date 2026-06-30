@@ -1,38 +1,85 @@
 import { useQuery } from '@tanstack/react-query';
 import {
   indexTreeAPI,
-  type IndexTreeLevel,
-  type IndexTreeSignal,
+  type IndexTreeDiscoverParams,
+  type IndexTreeNavigateParams,
+  type IndexTreeRangeParams,
 } from '@/lib/api-client';
 
 // ── Index Tree query keys ─────────────────────────────────────────────────
 
+function facetKey(params: IndexTreeDiscoverParams = {}) {
+  return (params.facets ?? []).join(',');
+}
+
+function navigateSelectionKey(params: IndexTreeNavigateParams = {}) {
+  const filterKey = (params.filters ?? [])
+    .map((filter) => `${filter.facet}=${filter.values.join('||')}`)
+    .join('&');
+  const entityKey = (params.entityNeighbors ?? []).join('||');
+  return [filterKey, entityKey].filter(Boolean).join(';');
+}
+
+function hasNavigationSelection(params: IndexTreeNavigateParams) {
+  const hasFilters = (params.filters ?? []).some(
+    (filter) => filter.facet.trim().length > 0 && filter.values.some((value) => value.trim().length > 0),
+  );
+  const hasEntities = (params.entityNeighbors ?? []).some((entity) => entity.trim().length > 0);
+  return hasFilters || hasEntities;
+}
+
 export const indexTreeKeys = {
   all: ['index-tree'] as const,
-  nodes: (level: IndexTreeLevel = 'all') => [...indexTreeKeys.all, 'nodes', level] as const,
-  lens: (signal: IndexTreeSignal) => [...indexTreeKeys.all, 'lens', signal] as const,
+  discover: (params: IndexTreeDiscoverParams = {}) => [
+    ...indexTreeKeys.all,
+    'discover',
+    facetKey(params),
+    params.dateFrom ?? '',
+    params.dateTo ?? '',
+  ] as const,
+  navigate: (params: IndexTreeNavigateParams = {}) => [
+    ...indexTreeKeys.all,
+    'navigate',
+    navigateSelectionKey(params),
+    params.dateFrom ?? '',
+    params.dateTo ?? '',
+  ] as const,
+  ensure: (params: IndexTreeRangeParams = {}) => [
+    ...indexTreeKeys.all,
+    'ensure',
+    params.dateFrom ?? '',
+    params.dateTo ?? '',
+  ] as const,
   shadow: (query: string) => [...indexTreeKeys.all, 'shadow', query] as const,
 };
 
-/**
- * Hook for fetching read-only Index Tree nodes.
- */
-export function useIndexTreeNodes(level: IndexTreeLevel = 'all') {
+/** Fetch canonical facet menus. The GUI presents values; it does not choose tools. */
+export function useIndexTreeDiscover(params: IndexTreeDiscoverParams = {}) {
   return useQuery({
-    queryKey: indexTreeKeys.nodes(level),
-    queryFn: () => indexTreeAPI.getNodes(level),
+    queryKey: indexTreeKeys.discover(params),
+    queryFn: () => indexTreeAPI.discover(params),
     staleTime: 60 * 1000,
     retry: 1,
   });
 }
 
-/**
- * Hook for fetching read-only Index Tree lens values.
- */
-export function useIndexTreeLens(signal: IndexTreeSignal) {
+/** Fetch deterministic journal pointers for explicit user-selected values. */
+export function useIndexTreeNavigate(params: IndexTreeNavigateParams) {
   return useQuery({
-    queryKey: indexTreeKeys.lens(signal),
-    queryFn: () => indexTreeAPI.getLens(signal),
+    queryKey: indexTreeKeys.navigate(params),
+    queryFn: () => indexTreeAPI.navigate(params),
+    enabled: hasNavigationSelection(params),
+    staleTime: 60 * 1000,
+    retry: 1,
+  });
+}
+
+/** Fetch ensure/fallback state when canonical discover reports stale index-b freshness. */
+export function useIndexTreeEnsure(params: IndexTreeRangeParams = {}, enabled = true) {
+  return useQuery({
+    queryKey: indexTreeKeys.ensure(params),
+    queryFn: () => indexTreeAPI.ensure(params),
+    enabled,
     staleTime: 60 * 1000,
     retry: 1,
   });

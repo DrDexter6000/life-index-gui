@@ -5,6 +5,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useHostAgentHealth } from '@/hooks/useHostAgent';
 import { getHostAgentCapability } from '@/lib/health-status';
 import { MobileMenu, type NavItem, type NavItemRenderState, getMobileLinkStyle, getMobileCnStyle, getMobileEnStyle, getActiveDotStyle } from './MobileMenu';
+import { PublicLinkDialog } from './PublicLinkDialog';
 
 const navItems: NavItem[] = [
   { path: '/home', labelKey: 'navHome', cn: '写入', en: 'WRITE' },
@@ -91,6 +92,7 @@ export function TopNavBar() {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [publicLinkOpen, setPublicLinkOpen] = useState(false);
   const { closeMobileMenu, lang, toggleLang, appPhase, setAppPhase, resetHome, setHomeActivated } = useUIStore();
   const { t } = useTranslation();
   const { data: hostAgentHealth, isLoading: healthLoading, isError: healthIsError } = useHostAgentHealth();
@@ -120,6 +122,12 @@ export function TopNavBar() {
   const handleMobileMenuClose = useCallback(() => {
     setMobileMenuOpen(false);
   }, []);
+
+  const handlePublicLinkOpen = useCallback(() => {
+    setMobileMenuOpen(false);
+    closeMobileMenu();
+    setPublicLinkOpen(true);
+  }, [closeMobileMenu]);
 
   const handleBrandClick = useCallback((e: ReactMouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
@@ -242,6 +250,17 @@ export function TopNavBar() {
               <span style={DESKTOP_LANGUAGE_SEPARATOR_STYLE}>/</span>
               <span className={lang === 'zh' ? 'text-[var(--color-gold)]' : 'text-[var(--color-secondary)]'}>中</span>
             </button>
+
+            <button
+              type="button"
+              aria-label={t('publicLinkTitle')}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-amber)]/25 bg-[var(--color-amber)]/5 px-3 py-2 text-[0.6875rem] font-medium text-[var(--color-amber)] transition-colors hover:bg-[var(--color-amber)]/10 hover:border-[var(--color-amber)]/40"
+              style={{ fontFamily: 'var(--font-control)', letterSpacing: '0.08em', textTransform: 'uppercase' }}
+              onClick={handlePublicLinkOpen}
+            >
+              <span className="material-symbols-outlined text-[15px]">public</span>
+              <span>{t('publicLinkNavShort')}</span>
+            </button>
           </div>
         </div>
 
@@ -274,6 +293,12 @@ export function TopNavBar() {
         isOpen={mobileMenuOpen}
         onClose={handleMobileMenuClose}
         onNavClick={handleNavClick}
+        onPublicLinkClick={handlePublicLinkOpen}
+      />
+
+      <PublicLinkDialog
+        isOpen={publicLinkOpen}
+        onClose={() => setPublicLinkOpen(false)}
       />
     </nav>
   );

@@ -87,3 +87,10 @@ __pycache__/
 
 # transient dev-server pid files
 *.pid
+.wao/
+
+# Git LFS installs these into the configured hooks path locally.
+dev/hooks/post-checkout
+dev/hooks/post-commit
+dev/hooks/post-merge
+dev/hooks/pre-push

@@ -272,7 +272,6 @@ export default function IndexDiagnostics() {
         healthy={isHealthy}
         issues={checkIssues}
         ftsCount={checkData?.fts_count}
-        vectorCount={checkData?.vector_count}
         fileCount={checkData?.file_count}
         t={t}
       />
@@ -355,7 +354,6 @@ function IndexHealthCard({
   healthy,
   issues,
   ftsCount,
-  vectorCount,
   fileCount,
   t,
 }: {
@@ -364,7 +362,6 @@ function IndexHealthCard({
   healthy: boolean;
   issues: string[];
   ftsCount?: number;
-  vectorCount?: number;
   fileCount?: number;
   t: (key: string) => string;
 }) {
@@ -405,18 +402,12 @@ function IndexHealthCard({
       </p>
 
       {/* Count summary */}
-      {(ftsCount !== undefined || vectorCount !== undefined || fileCount !== undefined) && (
-        <div className="grid grid-cols-3 gap-4 mb-4" data-testid="index-counts">
+      {(ftsCount !== undefined || fileCount !== undefined) && (
+        <div className="grid grid-cols-2 gap-4 mb-4" data-testid="index-counts">
           {ftsCount !== undefined && (
             <div>
               <div className="text-xs text-[var(--color-muted)] uppercase tracking-wider mb-1">FTS</div>
               <div className="text-lg text-[var(--color-primary)]">{ftsCount}</div>
-            </div>
-          )}
-          {vectorCount !== undefined && (
-            <div>
-              <div className="text-xs text-[var(--color-muted)] uppercase tracking-wider mb-1">Vector</div>
-              <div className="text-lg text-[var(--color-primary)]">{vectorCount}</div>
             </div>
           )}
           {fileCount !== undefined && (

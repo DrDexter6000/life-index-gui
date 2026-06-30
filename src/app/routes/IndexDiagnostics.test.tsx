@@ -233,6 +233,8 @@ describe('IndexDiagnostics', () => {
   it('shows index counts when available', () => {
     renderIndexDiagnostics();
     expect(screen.getByTestId('index-counts')).toBeInTheDocument();
+    expect(screen.getByText('FTS')).toBeInTheDocument();
+    expect(screen.queryByText('Vector')).not.toBeInTheDocument();
   });
 
   // ── Verify card ────────────────────────────────────────────────────────

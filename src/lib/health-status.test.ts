@@ -17,8 +17,8 @@ const readyHealth: HostAgentHealthResponse = {
 };
 
 afterEach(() => {
-  AI_PLUS_FEATURE_ENABLES.groundedQuery = false;
-  AI_PLUS_FEATURE_ENABLES.smartMetadata = false;
+  AI_PLUS_FEATURE_ENABLES.groundedQuery = true;
+  AI_PLUS_FEATURE_ENABLES.smartMetadata = true;
 });
 
 describe('isSmartCapabilityUnavailable', () => {
@@ -45,14 +45,14 @@ describe('isSmartCapabilityUnavailable', () => {
 });
 
 describe('getHostAgentCapability', () => {
-  it('keeps all AI+ features frozen by default even when host-agent health is ready', () => {
+  it('enables AI+ features by default when host-agent health is ready', () => {
     const cap = getHostAgentCapability(readyHealth);
 
-    expect(cap.status).toBe('unavailable');
-    expect(cap.canSendEvidence).toBe(false);
-    expect(cap.reason).toBe('not-ready');
-    expect(cap.features.groundedQuery).toMatchObject({ ready: true, enabled: false, available: false });
-    expect(cap.features.smartMetadata).toMatchObject({ ready: true, enabled: false, available: false });
+    expect(cap.status).toBe('ready');
+    expect(cap.canSendEvidence).toBe(true);
+    expect(cap.reason).toBe('ready');
+    expect(cap.features.groundedQuery).toMatchObject({ ready: true, enabled: true, available: true });
+    expect(cap.features.smartMetadata).toMatchObject({ ready: true, enabled: true, available: true });
   });
 
   it('allows groundedQuery and smartMetadata to be enabled independently', () => {

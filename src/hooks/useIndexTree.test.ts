@@ -4,8 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
 import {
   indexTreeKeys,
-  useIndexTreeNodes,
-  useIndexTreeLens,
+  useIndexTreeDiscover,
+  useIndexTreeEnsure,
+  useIndexTreeNavigate,
   useIndexTreeShadow,
 } from '@/hooks/useIndexTree';
 
@@ -35,49 +36,59 @@ function mockFetchSuccess(data: unknown) {
 }
 
 describe('indexTreeKeys stability', () => {
-  it('returns stable keys for nodes, lens, and shadow diagnostics', () => {
-    expect(indexTreeKeys.nodes('month')).toEqual(['index-tree', 'nodes', 'month']);
-    expect(indexTreeKeys.lens('topic')).toEqual(['index-tree', 'lens', 'topic']);
+  it('returns stable keys for canonical navigation and shadow diagnostics', () => {
+    expect(indexTreeKeys.discover({ facets: ['topic'] })).toEqual(['index-tree', 'discover', 'topic', '', '']);
+    expect(indexTreeKeys.navigate({ filters: [{ facet: 'topic', values: ['work'] }] })).toEqual([
+      'index-tree',
+      'navigate',
+      'topic=work',
+      '',
+      '',
+    ]);
+    expect(indexTreeKeys.ensure({ dateFrom: '2026-05' })).toEqual(['index-tree', 'ensure', '2026-05', '']);
     expect(indexTreeKeys.shadow('alpha beta')).toEqual(['index-tree', 'shadow', 'alpha beta']);
   });
 });
 
-describe('useIndexTreeNodes', () => {
+describe('useIndexTreeDiscover', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('fetches nodes with the selected level through the public backend route', async () => {
+  it('fetches discover menus through the canonical backend route', async () => {
     let capturedUrl = '';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       capturedUrl = url as string;
       return mockFetchSuccess({
         success: true,
         schema_version: 'm31.index_tree.v1',
-        command: 'index-tree.nodes',
+        command: 'index-tree.discover',
         generated_at: '2026-05-31T00:00:00Z',
         data: {
           truth_source: 'journals',
-          level: 'month',
-          nodes: [],
+          privacy_level: 'same_as_journals',
+          selection_contract: 'host_agent_selects_values; tool_executes_only',
+          facets: { topic: { facet: 'topic', value_count: 0, values: [] } },
+          freshness: { fresh: true },
+          fallback: { used: false, reason: null },
         },
         errors: [],
       }) as Response;
     });
 
-    const { result } = renderHook(() => useIndexTreeNodes('month'), {
+    const { result } = renderHook(() => useIndexTreeDiscover({ facets: ['topic'] }), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(capturedUrl).toBe('/api/index-tree/nodes?level=month');
-    expect(result.current.data?.data.level).toBe('month');
+    expect(capturedUrl).toBe('/api/index-tree/discover?facet=topic');
+    expect(result.current.data?.data.selection_contract).toBe('host_agent_selects_values; tool_executes_only');
   });
 
-  it('retries node diagnostics once before surfacing failure state', async () => {
+  it('retries discover once before surfacing failure state', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('index tree unavailable'));
 
-    const { result } = renderHook(() => useIndexTreeNodes('month'), {
+    const { result } = renderHook(() => useIndexTreeDiscover({ facets: ['topic'] }), {
       wrapper: createWrapper(),
     });
 
@@ -86,43 +97,90 @@ describe('useIndexTreeNodes', () => {
   });
 });
 
-describe('useIndexTreeLens', () => {
+describe('useIndexTreeNavigate', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('fetches lens values as evidence navigation, not truth claims', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => (
-      mockFetchSuccess({
+  it('fetches deterministic navigation only after host/user selected values exist', async () => {
+    let capturedUrl = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      capturedUrl = url as string;
+      return mockFetchSuccess({
         success: true,
         schema_version: 'm31.index_tree.v1',
-        command: 'index-tree.lens',
+        command: 'index-tree.navigate',
         generated_at: '2026-05-31T00:00:00Z',
         data: {
           truth_source: 'journals',
           privacy_level: 'same_as_journals',
-          signal: 'topic',
-          coverage: { entries_in_scope: 1, present: 1, parseable: 1 },
-          items: [
-            {
-              value: 'work',
-              count: 1,
-              node_refs: [{ type: 'month', node_id: 'month:2026-05' }],
-              evidence_paths: ['Journals/2026/05/life-index_2026-05-01_001.md'],
-              freshness: ['fresh'],
-            },
-          ],
+          entry_pointers: ['Journals/2026/05/life-index_2026-05-01_001.md'],
+          entries: [],
+          freshness: { fresh: true },
+          fallback: { used: false, reason: null },
         },
         errors: [],
-      }) as Response
+      }) as Response;
+    });
+
+    const { result } = renderHook(
+      () => useIndexTreeNavigate({ filters: [{ facet: 'topic', values: ['work'] }] }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(capturedUrl).toBe('/api/index-tree/navigate');
+    expect(result.current.data?.data.entry_pointers[0]).toContain('life-index_2026-05-01_001.md');
+  });
+
+  it('does not call navigate with no selected filters or entity neighbors', () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => (
+      mockFetchSuccess({}) as Response
     ));
 
-    const { result } = renderHook(() => useIndexTreeLens('topic'), {
+    const { result } = renderHook(() => useIndexTreeNavigate({ filters: [] }), {
+      wrapper: createWrapper(),
+    });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('useIndexTreeEnsure', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('fetches ensure fallback state for stale index-b ranges', async () => {
+    let capturedUrl = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      capturedUrl = url as string;
+      return mockFetchSuccess({
+        success: true,
+        schema_version: 'm31.index_tree.v1',
+        command: 'index-tree.ensure',
+        generated_at: '2026-05-31T00:00:00Z',
+        data: {
+          truth_source: 'journals',
+          freshness: { fresh: false },
+          fallback: {
+            used: true,
+            reason: 'index_b_stale',
+            journal_fallback_pointers: ['Journals/2026/05/life-index_2026-05-01_001.md'],
+          },
+        },
+        errors: [],
+      }) as Response;
+    });
+
+    const { result } = renderHook(() => useIndexTreeEnsure({ dateFrom: '2026-05' }), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.data.items[0].evidence_paths[0]).toContain('life-index_2026-05-01_001.md');
+    expect(capturedUrl).toBe('/api/index-tree/ensure?from=2026-05');
+    expect(result.current.data?.data.fallback.journal_fallback_pointers[0]).toContain('001.md');
   });
 });
 
@@ -181,6 +239,5 @@ describe('useIndexTreeShadow', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(capturedUrl).toBe('/api/index-tree/shadow?query=alpha%20beta');
     expect(result.current.data?.data.diagnostic_only).toBe(true);
-    expect(result.current.data?.data.default_search_mutated).toBe(false);
   });
 });

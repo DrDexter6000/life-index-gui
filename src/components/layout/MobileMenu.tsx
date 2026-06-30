@@ -28,6 +28,7 @@ interface MobileMenuProps {
   isOpen: boolean;
   onClose: () => void;
   onNavClick: (e: ReactMouseEvent<HTMLAnchorElement>) => void;
+  onPublicLinkClick: () => void;
 }
 
 // ─── Style Constants ─────────────────────────────────────────────────────────
@@ -191,7 +192,7 @@ export function getMobileLanguageButtonStyle(isActive: boolean): CSSProperties {
  * Handles lightweight overlay, dropdown rendering, focus trap, and language switching.
  * Toggle button remains in TopNavBar.
  */
-export function MobileMenu({ navItemRenderStates, isOpen, onClose, onNavClick }: MobileMenuProps) {
+export function MobileMenu({ navItemRenderStates, isOpen, onClose, onNavClick, onPublicLinkClick }: MobileMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const { lang, toggleLang } = useUIStore();
   const { t } = useTranslation();
@@ -357,6 +358,27 @@ export function MobileMenu({ navItemRenderStates, isOpen, onClose, onNavClick }:
 
             {/* Divider */}
             <div style={MOBILE_DIVIDER_STYLE} />
+
+            <button
+              type="button"
+              className="mb-[0.625rem] flex w-full items-center justify-between rounded-[12px] px-[1.125rem] py-3 text-left transition-all duration-200 hover:bg-[var(--color-gold-10)]"
+              onClick={onPublicLinkClick}
+            >
+              <div className="flex items-center" style={MOBILE_NAV_TEXT_GROUP_STYLE}>
+                <span
+                  className="material-symbols-outlined text-[18px] text-[var(--color-gold)]"
+                  aria-hidden="true"
+                >
+                  public
+                </span>
+                <span className="font-semibold text-[0.9375rem] tracking-[0.08em] text-[var(--color-primary)]">
+                  {t('publicLinkNav')}
+                </span>
+                <span className="text-xs uppercase tracking-wider text-[var(--color-secondary)]">
+                  PUBLIC
+                </span>
+              </div>
+            </button>
 
             {/* Language Section */}
             <div

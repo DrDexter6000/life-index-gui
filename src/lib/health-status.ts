@@ -20,9 +20,14 @@ export type AiPlusFeatureKey = 'groundedQuery' | 'smartMetadata';
 
 export const AI_PLUS_FEATURE_KEYS: readonly AiPlusFeatureKey[] = ['groundedQuery', 'smartMetadata'];
 
+function envFlagDefaultOn(value: unknown): boolean {
+  const normalized = String(value ?? 'true').trim().toLowerCase();
+  return !['0', 'false', 'off', 'no'].includes(normalized);
+}
+
 export const AI_PLUS_FEATURE_ENABLES: Record<AiPlusFeatureKey, boolean> = {
-  groundedQuery: import.meta.env.VITE_LIFE_INDEX_AI_PLUS_GROUNDED_QUERY === 'true',
-  smartMetadata: import.meta.env.VITE_LIFE_INDEX_AI_PLUS_SMART_METADATA === 'true',
+  groundedQuery: envFlagDefaultOn(import.meta.env.VITE_LIFE_INDEX_AI_PLUS_GROUNDED_QUERY),
+  smartMetadata: envFlagDefaultOn(import.meta.env.VITE_LIFE_INDEX_AI_PLUS_SMART_METADATA),
 };
 
 export interface FeatureCapability {

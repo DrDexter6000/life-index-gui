@@ -1,4 +1,4 @@
-"""Search router — full-text + semantic search via CLI."""
+"""Search router — CLI-backed journal search surfaces."""
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -24,7 +24,7 @@ class SearchRequest(BaseModel):
     dateStart: str | None = None
     dateEnd: str | None = None
     limit: int = 20
-    level: int = 2
+    level: int = 3
 
 
 class SearchResponse(BaseModel):
@@ -48,38 +48,17 @@ class SmartSearchResponse(BaseModel):
 async def search_journals(req: SearchRequest) -> APIResponse[SearchResponse]:
     """Search journals via CLI search command."""
     cli = CLIAdapter()
-
-    args = [
-        "search",
-        "--level",
-        str(req.level),
-        "--limit",
-        str(req.limit),
-        "--no-semantic",
-    ]
-
-    if req.query:
-        args.extend(["--query", req.query])
-
-    if req.topics:
-        for t in req.topics:
-            args.extend(["--topic", t])
-
-    if req.moods:
-        args.extend(["--mood", ",".join(req.moods)])
-
-    if req.people:
-        args.extend(["--people", ",".join(req.people)])
-
-    if req.dateStart:
-        args.extend(["--date-from", req.dateStart])
-
-    if req.dateEnd:
-        args.extend(["--date-to", req.dateEnd])
+    args = build_search_args(req)
 
     try:
         data = await cli.run_json(args, timeout=30.0)
+    except CLIError as e:
+        code, msg = map_cli_error(e.stderr, e.returncode)
+        return APIResponse.error_response(code, msg)
+    except Exception:
+        return APIResponse.error_response("SEARCH_ERROR", "搜索时遇到了问题")
 
+    try:
         results = _search_results(data)
 
         journals: list[JournalSummary] = []
@@ -107,12 +86,40 @@ async def search_journals(req: SearchRequest) -> APIResponse[SearchResponse]:
             SearchResponse(results=journals, total=total, meta=cli_meta),
             meta=cli_meta,
         )
-
-    except CLIError as e:
-        code, msg = map_cli_error(e.stderr, e.returncode)
-        return APIResponse.error_response(code, msg)
     except Exception:
         return APIResponse.error_response("SEARCH_ERROR", "搜索时遇到了问题")
+
+
+def build_search_args(req: SearchRequest) -> list[str]:
+    """Build CLI keyword search args for the current deterministic contract."""
+    args = [
+        "search",
+        "--level",
+        str(req.level),
+        "--limit",
+        str(req.limit),
+    ]
+
+    if req.query:
+        args.extend(["--query", req.query])
+
+    if req.topics:
+        for t in req.topics:
+            args.extend(["--topic", t])
+
+    if req.moods:
+        args.extend(["--mood", ",".join(req.moods)])
+
+    if req.people:
+        args.extend(["--people", ",".join(req.people)])
+
+    if req.dateStart:
+        args.extend(["--date-from", req.dateStart])
+
+    if req.dateEnd:
+        args.extend(["--date-to", req.dateEnd])
+
+    return args
 
 
 @router.post("/smart-search")
@@ -120,7 +127,7 @@ async def smart_search(req: SmartSearchRequest) -> APIResponse[SmartSearchRespon
     """Smart-search via CLI deterministic scaffold/evidence mode.
 
     Uses ``life-index smart-search --query <q>`` without ``--use-llm``.
-    Returns scaffold steps, evidence items, and provenance metadata.
+    Maps the current CLI ``filtered_results`` contract into GUI evidence.
     """
     if not req.query or not req.query.strip():
         return APIResponse.error_response("VALIDATION_ERROR", "查询内容不能为空")
@@ -134,28 +141,9 @@ async def smart_search(req: SmartSearchRequest) -> APIResponse[SmartSearchRespon
         if not isinstance(data, dict):
             data = {}
 
-        scaffold = data.get("scaffold", [])
-        evidence_raw = data.get("evidence", [])
-        provenance = str(data.get("provenance", "deterministic"))
-
-        evidence: list[dict] = []
-        for item in evidence_raw:
-            if not isinstance(item, dict):
-                continue
-            meta = item.get("metadata", {})
-            parsed = _parse_metadata(meta)
-            evidence.append({
-                "id": _path_to_id(item.get("rel_path", item.get("path", ""))),
-                "title": item.get("title", meta.get("title", "")),
-                "date": item.get("date", meta.get("date", "")),
-                "abstract": parsed["abstract"],
-                "topics": parsed["topics"],
-                "moods": parsed["moods"],
-                "people": parsed["people"],
-                "tags": parsed["tags"],
-                "location": parsed["location"],
-                "project": parsed["project"],
-            })
+        scaffold = _smart_search_scaffold(data)
+        evidence = _smart_search_evidence(data)
+        provenance = _smart_search_provenance(data)
 
         cli_meta = _build_meta(data, args)
 
@@ -204,7 +192,74 @@ def _build_meta(data: dict, command_args: list[str]) -> dict:
         events = data.get("events")
         if events is not None:
             meta["events"] = events
+        mode = data.get("smart_search_mode")
+        if mode is not None:
+            meta["smartSearchMode"] = mode
+        semantic_fallback_used = data.get("semantic_fallback_used")
+        if semantic_fallback_used is not None:
+            meta["semanticFallbackUsed"] = semantic_fallback_used
+        query_plan = data.get("query_plan")
+        if isinstance(query_plan, dict):
+            strategy = query_plan.get("strategy")
+            if strategy is not None:
+                meta["queryPlanStrategy"] = strategy
+        citations = data.get("citations")
+        if citations is not None:
+            meta["citations"] = citations
     return meta
+
+
+def _smart_search_scaffold(data: dict) -> list[dict]:
+    raw = data.get("answer_scaffold", data.get("scaffold", []))
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if isinstance(raw, dict):
+        return [raw]
+    if raw:
+        return [{"description": str(raw)}]
+    return []
+
+
+def _smart_search_provenance(data: dict) -> str:
+    return str(data.get("smart_search_mode") or data.get("provenance") or "deterministic")
+
+
+def _smart_search_evidence(data: dict) -> list[dict]:
+    raw = data.get("filtered_results")
+    if not isinstance(raw, list):
+        raw = data.get("evidence", [])
+    if not isinstance(raw, list):
+        return []
+
+    evidence: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("metadata", {})
+        if not isinstance(meta, dict):
+            meta = {}
+        parsed = _parse_metadata(meta)
+        path = str(
+            item.get("rel_path")
+            or item.get("journal_route_path")
+            or item.get("path")
+            or ""
+        )
+        evidence.append({
+            "id": _path_to_id(path),
+            "title": item.get("title", meta.get("title", "")),
+            "date": item.get("date", meta.get("date", "")),
+            "path": path,
+            "rel_path": item.get("rel_path", path),
+            "abstract": parsed["abstract"] or item.get("snippet"),
+            "topics": parsed["topics"],
+            "moods": parsed["moods"],
+            "people": parsed["people"],
+            "tags": parsed["tags"],
+            "location": parsed["location"] or item.get("location"),
+            "project": parsed["project"],
+        })
+    return evidence
 
 
 def build_smart_search_args(query: str) -> list[str]:

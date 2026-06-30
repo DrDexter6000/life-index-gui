@@ -191,8 +191,8 @@ async def test_search_journals_with_filters():
 
 
 @pytest.mark.asyncio
-async def test_search_journals_disables_semantic_by_default():
-    """POST /api/search uses keyword-only CLI search unless explicitly expanded."""
+async def test_search_journals_uses_keyword_args_without_retired_semantic_flags():
+    """POST /api/search no longer sends retired semantic/vector flags."""
     mock_adapter = MagicMock()
     mock_adapter.run_json = AsyncMock(return_value={"l2_results": []})
 
@@ -204,7 +204,65 @@ async def test_search_journals_disables_semantic_by_default():
 
     assert response.status_code == 200
     call_args = mock_adapter.run_json.call_args[0][0]
-    assert "--no-semantic" in call_args
+    assert call_args[0] == "search"
+    assert call_args[call_args.index("--level") + 1] == "2"
+    assert call_args[call_args.index("--limit") + 1] == "10"
+    assert "test" in call_args
+    assert "--no-semantic" not in call_args
+    assert not any(arg.startswith("--semantic") for arg in call_args)
+    assert "--fts-weight" not in call_args
+
+
+@pytest.mark.asyncio
+async def test_search_journals_ignores_retired_semantic_request_fields():
+    """Retired semantic request fields are ignored and never reach the CLI."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(return_value={"l2_results": []})
+
+    with patch("backend.routers.search.CLIAdapter", return_value=mock_adapter):
+        response = client.post(
+            "/api/search",
+            json={
+                "query": "sleep patterns",
+                "semanticPolicy": "hybrid",
+                "semanticWeight": 0.7,
+                "ftsWeight": 1.3,
+            },
+        )
+
+    assert response.status_code == 200
+    call_args = mock_adapter.run_json.call_args[0][0]
+    assert call_args[call_args.index("--level") + 1] == "3"
+    assert not any(arg.startswith("--semantic") for arg in call_args)
+    assert "--fts-weight" not in call_args
+
+
+@pytest.mark.asyncio
+async def test_search_journals_does_not_retry_retired_semantic_fallback():
+    """POST /api/search treats semantic/vector errors as ordinary CLI errors."""
+    from backend.adapter.cli_adapter import CLIError
+
+    semantic_error = CLIError(
+        1,
+        "vector index missing: semantic search unavailable; rebuild index",
+    )
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(side_effect=semantic_error)
+
+    with patch("backend.routers.search.CLIAdapter", return_value=mock_adapter):
+        response = client.post(
+            "/api/search",
+            json={"query": "投资", "level": 2, "limit": 10},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "CLI_ERROR"
+    assert mock_adapter.run_json.call_count == 1
+    call_args = mock_adapter.run_json.call_args_list[0][0][0]
+    assert not any(arg.startswith("--semantic") for arg in call_args)
+    assert "--no-semantic" not in call_args
 
 
 @pytest.mark.asyncio
@@ -248,34 +306,99 @@ def test_smart_search_contract_args_exclude_use_llm():
 # --- S4 Exit Gate: Smart-search endpoint tests ---
 
 
-@pytest.mark.asyncio
-async def test_smart_search_endpoint_success():
-    """POST /api/smart-search returns scaffold/evidence with provenance."""
-    mock_data = {
-        "scaffold": [
-            {"step": "retrieve", "description": "Searching journal entries"},
-            {"step": "evidence", "description": "Compiling evidence from results"},
-        ],
-        "evidence": [
-            {
-                "rel_path": "Journals/2026/05/life-index_2026-05-10_001.md",
-                "date": "2026-05-10",
-                "title": "Summer Trip",
-                "metadata": {"topic": "Travel", "mood": "Excited"},
-            }
-        ],
-        "provenance": "deterministic",
-        "schema_version": "1.0",
-        "events": [{"type": "search", "detail": "keyword scan"}],
-    }
+CLI_SMART_SEARCH_GOLDEN = {
+    # Captured from `life-index smart-search -q "最近睡得好不好"` on the
+    # authorized sandbox, with values scrubbed but the CLI contract shape kept.
+    "success": True,
+    "query": "最近睡得好不好",
+    "rewritten_query": "最近睡得好不好",
+    "filtered_results": [
+        {
+            "date": "2026-06-02",
+            "similarity": 0.71,
+            "source": "semantic_fallback",
+            "path": "D:/sandbox/Journals/2026/06/life-index_2026-06-02_001.md",
+            "rel_path": "Journals/2026/06/life-index_2026-06-02_001.md",
+            "journal_route_path": "2026/06/life-index_2026-06-02_001.md",
+            "title": "Sleep note",
+            "snippet": "Slept late and woke tired.",
+            "location": "Home",
+            "weather": "Cloudy",
+            "metadata": {
+                "title": "Sleep note",
+                "topic": "health",
+                "mood": "tired",
+                "people": "Alice, Bob",
+                "project": "Recovery",
+                "tags": "sleep, v1",
+                "location": "Home",
+                "abstract": "Slept late and woke tired.",
+            },
+            "related_entries": [],
+            "backlinked_by": [],
+            "search_rank": 1,
+            "rrf_score": 0.5,
+            "final_score": 0.7,
+            "relevance_score": 0.7,
+            "fts_score": 0.0,
+            "semantic_score": 0.7,
+            "confidence": 0.7,
+            "title_promoted": False,
+        },
+        {
+            "date": "2026-06-03",
+            "similarity": 0.63,
+            "source": "semantic_fallback",
+            "path": "D:/sandbox/Journals/2026/06/life-index_2026-06-03_001.md",
+            "rel_path": "Journals/2026/06/life-index_2026-06-03_001.md",
+            "journal_route_path": "2026/06/life-index_2026-06-03_001.md",
+            "title": "Sleep follow-up",
+            "snippet": "Sleep was still unstable.",
+            "metadata": {
+                "title": "Sleep follow-up",
+                "topic": ["health"],
+                "mood": ["uneasy"],
+                "tags": ["sleep", "follow-up"],
+            },
+            "related_entries": [],
+            "backlinked_by": [],
+            "search_rank": 2,
+            "semantic_score": 0.63,
+        },
+    ],
+    "summary": {
+        "result_count": 2,
+        "strategy": "keyword_with_semantic_fallback",
+    },
+    "citations": [
+        {"path": "Journals/2026/06/life-index_2026-06-02_001.md"},
+        {"path": "Journals/2026/06/life-index_2026-06-03_001.md"},
+    ],
+    "agent_unavailable": True,
+    "performance": {"total_ms": 12477.41},
+    "semantic_fallback_used": True,
+    "smart_search_mode": "deterministic_scaffold",
+    "agent_instructions": "Use filtered_results as evidence.",
+    "answer_scaffold": {
+        "step": "synthesize",
+        "description": "Summarize sleep-related evidence from filtered results.",
+    },
+    "query_plan": {"strategy": "keyword_with_semantic_fallback"},
+    "agent_decisions_summary": {"mode": "deterministic"},
+    "schema_version": "smart_search.v1",
+}
 
+
+@pytest.mark.asyncio
+async def test_smart_search_endpoint_maps_real_cli_filtered_results_to_evidence():
+    """POST /api/smart-search maps current CLI filtered_results into evidence."""
     mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(return_value=mock_data)
+    mock_adapter.run_json = AsyncMock(return_value=CLI_SMART_SEARCH_GOLDEN)
 
     with patch("backend.routers.search.CLIAdapter", return_value=mock_adapter):
         response = client.post(
             "/api/smart-search",
-            json={"query": "what did I do last summer"},
+            json={"query": "最近睡得好不好"},
         )
 
     assert response.status_code == 200
@@ -284,35 +407,23 @@ async def test_smart_search_endpoint_success():
     data = payload["data"]
     assert "scaffold" in data
     assert "evidence" in data
-    assert data["provenance"] == "deterministic"
-    assert len(data["evidence"]) == 1
-    assert data["evidence"][0]["title"] == "Summer Trip"
+    assert data["provenance"] == "deterministic_scaffold"
+    assert data["scaffold"] == [CLI_SMART_SEARCH_GOLDEN["answer_scaffold"]]
+    assert len(data["evidence"]) == len(CLI_SMART_SEARCH_GOLDEN["filtered_results"])
+    assert len(data["evidence"]) > 0
+    for evidence in data["evidence"]:
+        assert evidence["title"]
+        assert evidence["date"]
+        assert evidence["path"]
+    assert data["evidence"][0]["title"] == "Sleep note"
+    assert data["evidence"][0]["abstract"] == "Slept late and woke tired."
 
 
 @pytest.mark.asyncio
 async def test_smart_search_endpoint_preserves_evidence_people_project_tags():
     """POST /api/smart-search preserves v1 metadata on evidence entries."""
-    mock_data = {
-        "scaffold": [],
-        "evidence": [
-            {
-                "rel_path": "Journals/2026/05/life-index_2026-05-10_001.md",
-                "date": "2026-05-10",
-                "metadata": {
-                    "title": "Summer Trip",
-                    "topic": "Travel",
-                    "mood": "Excited",
-                    "people": "Alice, Bob",
-                    "project": "Vacation",
-                    "tags": "travel, v1",
-                },
-            }
-        ],
-        "provenance": "deterministic",
-    }
-
     mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(return_value=mock_data)
+    mock_adapter.run_json = AsyncMock(return_value=CLI_SMART_SEARCH_GOLDEN)
 
     with patch("backend.routers.search.CLIAdapter", return_value=mock_adapter):
         response = client.post(
@@ -325,23 +436,15 @@ async def test_smart_search_endpoint_preserves_evidence_people_project_tags():
     assert payload["ok"] is True
     evidence = payload["data"]["evidence"][0]
     assert evidence["people"] == ["Alice", "Bob"]
-    assert evidence["project"] == "Vacation"
-    assert evidence["tags"] == ["travel", "v1"]
+    assert evidence["project"] == "Recovery"
+    assert evidence["tags"] == ["sleep", "v1"]
 
 
 @pytest.mark.asyncio
 async def test_smart_search_endpoint_preserves_cli_metadata():
-    """POST /api/smart-search preserves schema_version, provenance, events."""
-    mock_data = {
-        "scaffold": [],
-        "evidence": [],
-        "provenance": "deterministic",
-        "schema_version": "2.1",
-        "events": [{"type": "index_scan"}, {"type": "evidence_compile"}],
-    }
-
+    """POST /api/smart-search preserves current CLI metadata fields."""
     mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(return_value=mock_data)
+    mock_adapter.run_json = AsyncMock(return_value=CLI_SMART_SEARCH_GOLDEN)
 
     with patch("backend.routers.search.CLIAdapter", return_value=mock_adapter):
         response = client.post(
@@ -352,13 +455,17 @@ async def test_smart_search_endpoint_preserves_cli_metadata():
     assert response.status_code == 200
     payload = response.json()
     envelope_meta = payload["meta"]
-    assert envelope_meta["schemaVersion"] == "2.1"
-    assert envelope_meta["provenance"] == "deterministic"
-    assert len(envelope_meta["events"]) == 2
+    assert envelope_meta["schemaVersion"] == "smart_search.v1"
+    assert envelope_meta["smartSearchMode"] == "deterministic_scaffold"
+    assert envelope_meta["semanticFallbackUsed"] is True
+    assert envelope_meta["queryPlanStrategy"] == "keyword_with_semantic_fallback"
+    assert len(envelope_meta["citations"]) == 2
     meta = payload["data"]["meta"]
-    assert meta["schemaVersion"] == "2.1"
-    assert meta["provenance"] == "deterministic"
-    assert len(meta["events"]) == 2
+    assert meta["schemaVersion"] == "smart_search.v1"
+    assert meta["smartSearchMode"] == "deterministic_scaffold"
+    assert meta["semanticFallbackUsed"] is True
+    assert meta["queryPlanStrategy"] == "keyword_with_semantic_fallback"
+    assert len(meta["citations"]) == 2
 
 
 @pytest.mark.asyncio
@@ -366,7 +473,9 @@ async def test_smart_search_endpoint_uses_build_smart_search_args():
     """POST /api/smart-search calls CLI with args from build_smart_search_args."""
     mock_adapter = MagicMock()
     mock_adapter.run_json = AsyncMock(return_value={
-        "scaffold": [], "evidence": [], "provenance": "deterministic",
+        "filtered_results": [],
+        "answer_scaffold": [],
+        "smart_search_mode": "deterministic_scaffold",
     })
 
     with patch("backend.routers.search.CLIAdapter", return_value=mock_adapter):

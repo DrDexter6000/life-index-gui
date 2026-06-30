@@ -7,6 +7,7 @@ from io import BytesIO
 import json
 import logging
 import os
+from secrets import compare_digest
 import tempfile
 from urllib.parse import quote
 
@@ -18,6 +19,14 @@ from PIL import Image, UnidentifiedImageError
 from backend.adapter.cli_adapter import CLIAdapter, CLIError
 from backend import config
 from backend.models.response import APIResponse
+from backend.public_link_auth import (
+    auth_env_complete,
+    auth_env_enabled,
+    cookie_header_value,
+    exchange_code,
+    get_cookie_name,
+    get_session_token,
+)
 from backend.routers import (
     entities,
     geocode,
@@ -28,6 +37,7 @@ from backend.routers import (
     index_tree,
     journals,
     maintenance,
+    public_link,
     search,
     stats,
 )
@@ -52,6 +62,111 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Public-link auth middleware
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def public_link_auth_middleware(request: Request, call_next):  # noqa: ANN001
+    """Fail-closed cookie check for all /api/* routes when auth env is enabled.
+
+    - Every /api/* request requires the session cookie matching
+      LIFE_INDEX_PUBLIC_LINK_SESSION_TOKEN.
+    - /api/public-link/* routes are blocked entirely (403) in auth mode.
+    - Non-/api routes are untouched.
+    """
+    path: str = request.url.path or ""
+
+    if not path.startswith("/api/"):
+        return await call_next(request)
+
+    if auth_env_enabled():
+        # Block public-link control endpoints entirely in auth mode
+        if path.startswith("/api/public-link/"):
+            payload = APIResponse.error_response(
+                "PUBLIC_LINK_AUTH_BLOCKED",
+                "Public-link control endpoints are unavailable when token-gated auth is active.",
+            )
+            return JSONResponse(status_code=403, content=payload.model_dump())
+
+        expected_token = get_session_token()
+        cookie_name = get_cookie_name()
+        cookie_header = request.headers.get("cookie", "")
+        cookie_value: str | None = None
+        for part in cookie_header.split(";"):
+            candidate = part.strip()
+            if candidate.startswith(f"{cookie_name}="):
+                cookie_value = candidate[len(cookie_name) + 1:]
+                break
+
+        if (
+            not auth_env_complete()
+            or not expected_token
+            or cookie_value is None
+            or not compare_digest(cookie_value, expected_token)
+        ):
+            payload = APIResponse.error_response(
+                "PUBLIC_LINK_AUTH_REQUIRED",
+                "Valid session cookie required.",
+            )
+            return JSONResponse(status_code=401, content=payload.model_dump())
+
+    return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# /auth/exchange — one-time code → session cookie
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/exchange")
+async def auth_exchange(request: Request):  # noqa: ANN001
+    """Exchange a one-time code for a session cookie.
+
+    Returns 200 with {redirectTo: "/"} and sets the HttpOnly/Secure/SameSite=Lax
+    cookie on success.  Returns 401 for missing/wrong/expired/used codes.
+    """
+    if not auth_env_enabled():
+        payload = APIResponse.error_response(
+            "PUBLIC_LINK_AUTH_NOT_CONFIGURED",
+            "Public-link auth is not configured on this backend.",
+        )
+        return JSONResponse(status_code=404, content=payload.model_dump())
+
+    try:
+        body = await request.json()
+    except Exception:
+        payload = APIResponse.error_response(
+            "INVALID_REQUEST_BODY",
+            "Request body must be valid JSON.",
+        )
+        return JSONResponse(status_code=400, content=payload.model_dump())
+
+    code = body.get("code") if isinstance(body, dict) else None
+    if not isinstance(code, str) or not code:
+        payload = APIResponse.error_response(
+            "PUBLIC_LINK_CODE_REQUIRED",
+            "A non-empty 'code' field is required.",
+        )
+        return JSONResponse(status_code=401, content=payload.model_dump())
+
+    if not exchange_code(code):
+        payload = APIResponse.error_response(
+            "PUBLIC_LINK_CODE_INVALID",
+            "Code is missing, wrong, expired, or already used.",
+        )
+        return JSONResponse(status_code=401, content=payload.model_dump())
+
+    token = get_session_token()
+    cookie_name = get_cookie_name()
+    set_cookie = cookie_header_value(cookie_name, token)
+    response = JSONResponse(
+        status_code=200,
+        content=APIResponse.success({"redirectTo": "/"}).model_dump(),
+    )
+    response.headers["Set-Cookie"] = set_cookie
+    return response
 
 
 async def unhandled_exception_handler(
@@ -86,6 +201,7 @@ app.include_router(entities.router, prefix="/api")
 app.include_router(geocode.router, prefix="/api")
 app.include_router(host_agent.router, prefix="/api")
 app.include_router(maintenance.router, prefix="/api")
+app.include_router(public_link.router, prefix="/api")
 
 
 @app.api_route("/api/attachments/{file_path:path}", methods=["GET", "HEAD"])

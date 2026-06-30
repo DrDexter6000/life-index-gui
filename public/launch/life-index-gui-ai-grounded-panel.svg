@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Life Index GUI AI+ grounded answer demo screenshot</title>
+  <desc id="desc">Sanitized demo screenshot showing a grounded AI+ answer panel with fictional evidence.</desc>
+  <defs>
+    <radialGradient id="bg" cx="54%" cy="6%" r="92%">
+      <stop offset="0" stop-color="#26364f"/>
+      <stop offset="0.5" stop-color="#111827"/>
+      <stop offset="1" stop-color="#070a11"/>
+    </radialGradient>
+    <linearGradient id="cyanGold" x1="0" x2="1">
+      <stop offset="0" stop-color="#8bd4ff"/>
+      <stop offset="1" stop-color="#f3d48b"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="1200" height="760" fill="url(#bg)"/>
+  <circle cx="972" cy="122" r="58" fill="#8bd4ff" opacity="0.08" filter="url(#glow)"/>
+  <circle cx="246" cy="604" r="72" fill="#f3d48b" opacity="0.07" filter="url(#glow)"/>
+  <rect x="64" y="52" width="1072" height="656" rx="18" fill="#0c111b" opacity="0.91" stroke="rgba(255,255,255,0.10)"/>
+  <g transform="translate(104 92)" font-family="Inter, Arial, sans-serif">
+    <text x="0" y="0" fill="#f6f0df" font-size="26" letter-spacing="4">AI+ STAR TRAIL</text>
+    <text x="0" y="30" fill="#91a4bf" font-size="14">Host Agent Handoff · grounded answer with cited demo entries</text>
+    <rect x="0" y="64" width="990" height="58" rx="29" fill="rgba(139,212,255,0.08)" stroke="rgba(139,212,255,0.22)"/>
+    <text x="32" y="100" fill="#eef4ff" font-size="18">Where do my strongest focus blocks appear?</text>
+    <rect x="832" y="76" width="126" height="34" rx="17" fill="rgba(128,226,180,0.12)" stroke="rgba(128,226,180,0.32)"/>
+    <circle cx="856" cy="93" r="5" fill="#80e2b4"/>
+    <text x="872" y="98" fill="#80e2b4" font-size="12">GROUNDED</text>
+  </g>
+  <g transform="translate(104 238)" font-family="Inter, Arial, sans-serif">
+    <rect width="322" height="386" rx="14" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.10)"/>
+    <text x="24" y="42" fill="#f3d48b" font-size="13" letter-spacing="2">EVIDENCE</text>
+    <g transform="translate(24 72)">
+      <rect width="274" height="82" rx="10" fill="rgba(139,212,255,0.08)" stroke="rgba(139,212,255,0.18)"/>
+      <text x="16" y="28" fill="#f6f0df" font-size="15">Focus Review</text>
+      <text x="16" y="50" fill="#91a4bf" font-size="12">2026-06-08 · planning</text>
+      <text x="16" y="70" fill="#c5d0e0" font-size="12">plan visible, fewer switches</text>
+    </g>
+    <g transform="translate(24 172)">
+      <rect width="274" height="82" rx="10" fill="rgba(243,212,139,0.08)" stroke="rgba(243,212,139,0.18)"/>
+      <text x="16" y="28" fill="#f6f0df" font-size="15">Morning Reset</text>
+      <text x="16" y="50" fill="#91a4bf" font-size="12">2026-06-01 · routine</text>
+      <text x="16" y="70" fill="#c5d0e0" font-size="12">one thing, clean evening</text>
+    </g>
+    <g transform="translate(24 272)">
+      <rect width="274" height="82" rx="10" fill="rgba(128,226,180,0.08)" stroke="rgba(128,226,180,0.18)"/>
+      <text x="16" y="28" fill="#f6f0df" font-size="15">Field Walk Notes</text>
+      <text x="16" y="50" fill="#91a4bf" font-size="12">2026-06-04 · mobility</text>
+      <text x="16" y="70" fill="#c5d0e0" font-size="12">short capture in motion</text>
+    </g>
+  </g>
+  <g transform="translate(462 238)" font-family="Inter, Arial, sans-serif">
+    <rect width="632" height="386" rx="14" fill="rgba(255,255,255,0.075)" stroke="rgba(255,255,255,0.11)"/>
+    <text x="30" y="44" fill="#f6f0df" font-size="24">Your strongest focus blocks cluster around visible closure.</text>
+    <rect x="30" y="70" width="572" height="1" fill="rgba(255,255,255,0.08)"/>
+    <text x="30" y="112" fill="#dce9f8" font-size="16">What the evidence shows</text>
+    <text x="30" y="146" fill="#c5d0e0" font-size="15">1. Calm starts matter: the morning reset entry links steadier output to a small room reset.</text>
+    <text x="30" y="178" fill="#c5d0e0" font-size="15">2. Visible plans matter: the focus review names fewer context switches after lunch.</text>
+    <text x="30" y="210" fill="#c5d0e0" font-size="15">3. Mobile capture works best when entries stay compact and concrete.</text>
+    <text x="30" y="264" fill="#f3d48b" font-size="16">Suggested next move</text>
+    <text x="30" y="298" fill="#c5d0e0" font-size="15">Create a lightweight daily close: one finished note, one open question, one next action.</text>
+    <g transform="translate(30 332)">
+      <rect width="170" height="34" rx="17" fill="rgba(139,212,255,0.10)" stroke="rgba(139,212,255,0.25)"/>
+      <text x="18" y="22" fill="#8bd4ff" font-size="12">Ask follow-up</text>
+      <rect x="190" width="182" height="34" rx="17" fill="rgba(243,212,139,0.10)" stroke="rgba(243,212,139,0.25)"/>
+      <text x="208" y="22" fill="#f3d48b" font-size="12">Open cited entries</text>
+      <rect x="392" width="170" height="34" rx="17" fill="rgba(128,226,180,0.10)" stroke="rgba(128,226,180,0.25)"/>
+      <text x="410" y="22" fill="#80e2b4" font-size="12">Save insight</text>
+    </g>
+  </g>
+  <path d="M180 210 C346 120 504 138 620 246 S874 370 1032 218" fill="none" stroke="url(#cyanGold)" stroke-width="1.2" opacity="0.32"/>
+</svg>

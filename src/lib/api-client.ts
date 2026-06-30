@@ -13,13 +13,16 @@ import {
   IndexCheckSchema,
   VerifyDiagnosticsSchema,
   CacheDryRunSchema,
-  IndexTreeNodesResponseSchema,
-  IndexTreeLensResponseSchema,
+  IndexTreeDiscoverResponseSchema,
+  IndexTreeEnsureResponseSchema,
+  IndexTreeNavigateResponseSchema,
   IndexTreeShadowResponseSchema,
   HostAgentHealthResponseSchema,
   HostAgentQueryResponseSchema,
   HostAgentMetadataProposalSchema,
   HostAgentStreamEventSchema,
+  PublicLinkEventSchema,
+  PublicLinkStatusSchema,
   EntityStatsSchema,
   EntityItemSchema,
   EntityCheckSchema,
@@ -491,7 +494,6 @@ export interface SearchParams {
   dateEnd?: string;
   level?: number;
   limit?: number;
-  noSemantic?: boolean;
 }
 
 export interface SearchResponse {
@@ -598,17 +600,36 @@ export interface CacheDryRunResponse {
   error?: string;
 }
 
-// ── Index Tree types (M4 — read-only evidence navigation) ────────────────
+// ── Index Tree types (canonical read-only evidence navigation) ───────────
 
-export type IndexTreeLevel = 'all' | 'root' | 'year' | 'month';
-export type IndexTreeSignal = 'topic' | 'people' | 'project';
-export type IndexTreeNodesResponse = z.infer<typeof IndexTreeNodesResponseSchema>;
-export type IndexTreeLensResponse = z.infer<typeof IndexTreeLensResponseSchema>;
+export type IndexTreeFacet = 'topic' | 'people' | 'project' | string;
+export interface IndexTreeRangeParams {
+  dateFrom?: string;
+  dateTo?: string;
+}
+export interface IndexTreeDiscoverParams extends IndexTreeRangeParams {
+  facets?: IndexTreeFacet[];
+}
+export interface IndexTreeNavigateFilter {
+  facet: IndexTreeFacet;
+  values: string[];
+}
+export interface IndexTreeNavigateParams extends IndexTreeRangeParams {
+  filters?: IndexTreeNavigateFilter[];
+  entityNeighbors?: string[];
+  entityRelations?: string[];
+  entityMaxHops?: number;
+}
+export type IndexTreeDiscoverResponse = z.infer<typeof IndexTreeDiscoverResponseSchema>;
+export type IndexTreeNavigateResponse = z.infer<typeof IndexTreeNavigateResponseSchema>;
+export type IndexTreeEnsureResponse = z.infer<typeof IndexTreeEnsureResponseSchema>;
 export type IndexTreeShadowResponse = z.infer<typeof IndexTreeShadowResponseSchema>;
 export type HostAgentHealthResponse = z.infer<typeof HostAgentHealthResponseSchema>;
 export type HostAgentQueryResponse = z.infer<typeof HostAgentQueryResponseSchema>;
 export type HostAgentMetadataProposal = z.infer<typeof HostAgentMetadataProposalSchema>;
 export type HostAgentStreamEvent = z.infer<typeof HostAgentStreamEventSchema>;
+export type PublicLinkStatus = z.infer<typeof PublicLinkStatusSchema>;
+export type PublicLinkEvent = z.infer<typeof PublicLinkEventSchema>;
 
 export interface HostAgentMetadataProposalRequest {
   request_id?: string;
@@ -735,17 +756,35 @@ export const indexDiagnosticsAPI = {
   },
 };
 
+function buildIndexTreeRangeQuery(params: IndexTreeRangeParams = {}): URLSearchParams {
+  const query = new URLSearchParams();
+  if (params.dateFrom) query.set('from', params.dateFrom);
+  if (params.dateTo) query.set('to', params.dateTo);
+  return query;
+}
+
 export const indexTreeAPI = {
-  /** Fetch read-only Index Tree nodes through the backend CLI envelope wrapper */
-  getNodes: async (level: IndexTreeLevel = 'all'): Promise<IndexTreeNodesResponse> => {
-    const raw = await apiClient.get(`/index-tree/nodes?level=${encodeURIComponent(level)}`);
-    return parseData(IndexTreeNodesResponseSchema, raw);
+  /** Fetch canonical facet menus; host/user selects values, CLI executes only. */
+  discover: async (params: IndexTreeDiscoverParams = {}): Promise<IndexTreeDiscoverResponse> => {
+    const query = buildIndexTreeRangeQuery(params);
+    params.facets?.forEach((facet) => query.append('facet', facet));
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    const raw = await apiClient.get(`/index-tree/discover${suffix}`);
+    return parseData(IndexTreeDiscoverResponseSchema, raw);
   },
 
-  /** Fetch read-only Index Tree lens values for evidence navigation */
-  getLens: async (signal: IndexTreeSignal): Promise<IndexTreeLensResponse> => {
-    const raw = await apiClient.get(`/index-tree/lens?signal=${encodeURIComponent(signal)}`);
-    return parseData(IndexTreeLensResponseSchema, raw);
+  /** Navigate deterministic evidence pointers from explicit selected values. */
+  navigate: async (params: IndexTreeNavigateParams): Promise<IndexTreeNavigateResponse> => {
+    const raw = await apiClient.post('/index-tree/navigate', params);
+    return parseData(IndexTreeNavigateResponseSchema, raw);
+  },
+
+  /** Fetch freshness/fallback state for stale index-b ranges. */
+  ensure: async (params: IndexTreeRangeParams = {}): Promise<IndexTreeEnsureResponse> => {
+    const query = buildIndexTreeRangeQuery(params);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    const raw = await apiClient.get(`/index-tree/ensure${suffix}`);
+    return parseData(IndexTreeEnsureResponseSchema, raw);
   },
 
   /** Fetch shadow diagnostics only; this must not feed default search ranking */
@@ -818,6 +857,63 @@ export const hostAgentAPI = {
 
       yield event;
     }
+  },
+};
+
+export const publicLinkAPI = {
+  getStatus: async (): Promise<PublicLinkStatus> => {
+    const raw = await apiClient.get('/public-link/status');
+    return parseData(PublicLinkStatusSchema, raw);
+  },
+
+  start: async (req: { acceptRisk: true; frontendPort?: number }): Promise<PublicLinkStatus> => {
+    const raw = await apiClient.post('/public-link/start', {
+      accept_risk: req.acceptRisk,
+      frontend_port: req.frontendPort,
+    });
+    return parseData(PublicLinkStatusSchema, raw);
+  },
+
+  events: async function* (options?: { signal?: AbortSignal }): AsyncGenerator<PublicLinkEvent> {
+    const response = await fetch(`${API_BASE_URL}/public-link/events`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/event-stream',
+      },
+      signal: options?.signal,
+    });
+
+    if (!response.ok || !response.body) {
+      throw new APIClientError(
+        `HTTP ${response.status}: ${response.statusText}`,
+        'SERVER_ERROR',
+        response.status,
+      );
+    }
+
+    for await (const event of parseSseStream(response, PublicLinkEventSchema)) {
+      yield event;
+    }
+  },
+
+  stop: async (): Promise<PublicLinkStatus> => {
+    const raw = await apiClient.post('/public-link/stop', {});
+    return parseData(PublicLinkStatusSchema, raw);
+  },
+
+  /** Exchange a one-time code for an HttpOnly session cookie. */
+  exchange: async (req: { code: string }): Promise<{ redirectTo: string }> => {
+    const response = await fetch('/auth/exchange', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ code: req.code }),
+    });
+    const raw = await unwrap(response);
+    return parseData(z.object({ redirectTo: z.string() }), raw);
   },
 };
 

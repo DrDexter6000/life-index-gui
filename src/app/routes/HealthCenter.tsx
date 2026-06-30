@@ -359,8 +359,6 @@ function IndexDiagnosticsCard({
               </div>
               <div className="text-sm text-[var(--color-secondary)]">
                 <span>FTS: {indexCheck?.fts_count ?? '-'}</span>
-                <span className="mx-2 text-[var(--color-muted)]">/</span>
-                <span>Vector: {indexCheck?.vector_count ?? '-'}</span>
               </div>
             </div>
           </div>

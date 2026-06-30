@@ -4,8 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import IndexTreeDiagnostics from './IndexTreeDiagnostics';
 
-const mockUseIndexTreeNodes = vi.fn();
-const mockUseIndexTreeLens = vi.fn();
+const mockUseIndexTreeDiscover = vi.fn();
+const mockUseIndexTreeNavigate = vi.fn();
+const mockUseIndexTreeEnsure = vi.fn();
 const mockUseIndexTreeShadow = vi.fn();
 
 vi.mock('@/hooks/useTranslation', () => ({
@@ -13,25 +14,26 @@ vi.mock('@/hooks/useTranslation', () => ({
     t: (key: string) => {
       const map: Record<string, string> = {
         indexTreeDiagnostics: 'Index Tree Evidence Navigation',
-        indexTreeDiagnosticsSubtitle: 'Read-only diagnostics for freshness, coverage, and evidence refs.',
-        indexTreeNodes: 'Nodes',
+        indexTreeDiagnosticsSubtitle: 'Canonical discover and navigate surface for evidence refs.',
+        indexTreeDiscover: 'Discover facets',
+        indexTreeDiscoverDesc: 'Host/user selects values; the tool only executes deterministic navigation.',
+        indexTreeNavigate: 'Navigate evidence',
+        indexTreeNavigateDesc: 'Selected facets return journal pointers without GUI-side routing intelligence.',
+        indexTreeFacetTopic: 'Topic',
+        indexTreeFacetPeople: 'People',
+        indexTreeFacetProject: 'Project',
         indexTreeFreshness: 'Freshness',
         indexTreeEntryCount: 'Entries',
-        indexTreeSignalCoverage: 'Signal coverage',
         indexTreeEvidenceRefs: 'Evidence refs',
-        indexTreeLens: 'Lens navigation',
-        indexTreeLensDesc: 'Lens values are navigation aids with evidence refs, not truth claims.',
-        indexTreeLensSignalTopic: 'Topic',
-        indexTreeLensSignalPeople: 'People',
-        indexTreeLensSignalProject: 'Project',
+        indexTreeFallback: 'Journal fallback',
+        indexTreeUnavailable: 'Index tree diagnostics unavailable.',
+        indexTreeLoading: 'Loading index tree diagnostics...',
         indexTreeShadow: 'Shadow diagnostics',
         indexTreeShadowDesc: 'Shadow is diagnostic-only and does not change default search or smart-search ranking.',
         indexTreeShadowPlaceholder: 'Diagnostic query',
         indexTreeShadowRun: 'Run diagnostic',
         indexTreeShadowRecallPreserved: 'Recall preserved',
         indexTreeShadowDroppedPaths: 'Dropped paths',
-        indexTreeUnavailable: 'Index tree diagnostics unavailable.',
-        indexTreeLoading: 'Loading index tree diagnostics...',
       };
       return map[key] ?? key;
     },
@@ -39,8 +41,9 @@ vi.mock('@/hooks/useTranslation', () => ({
 }));
 
 vi.mock('@/hooks/useIndexTree', () => ({
-  useIndexTreeNodes: () => mockUseIndexTreeNodes(),
-  useIndexTreeLens: (signal: string) => mockUseIndexTreeLens(signal),
+  useIndexTreeDiscover: (request: unknown) => mockUseIndexTreeDiscover(request),
+  useIndexTreeNavigate: (request: unknown) => mockUseIndexTreeNavigate(request),
+  useIndexTreeEnsure: (request: unknown, enabled?: boolean) => mockUseIndexTreeEnsure(request, enabled),
   useIndexTreeShadow: (query: string) => mockUseIndexTreeShadow(query),
 }));
 
@@ -57,33 +60,32 @@ function renderIndexTreeDiagnostics() {
   );
 }
 
-const nodesQuery = {
+const discoverQuery = {
   data: {
     success: true,
     schema_version: 'm31.index_tree.v1',
-    command: 'index-tree.nodes',
+    command: 'index-tree.discover',
     generated_at: '2026-05-31T00:00:00Z',
     data: {
       truth_source: 'journals',
-      level: 'month',
-      nodes: [
-        {
-          node_id: 'month:2026-05',
-          level: 'month',
-          relative_path: 'Journals/2026/05/index_2026-05.md',
-          entry_count: 2,
-          freshness: 'fresh',
-          entry_refs: [
+      privacy_level: 'same_as_journals',
+      selection_contract: 'host_agent_selects_values; tool_executes_only',
+      facets: {
+        topic: {
+          facet: 'topic',
+          value_count: 1,
+          values: [
             {
-              relative_path: 'Journals/2026/05/life-index_2026-05-01_001.md',
-              signals: { topic: ['work'] },
+              value: 'work',
+              count: 2,
+              sample_entry_pointers: ['Journals/2026/05/life-index_2026-05-01_001.md'],
+              raw_values: ['work'],
             },
           ],
-          signal_coverage: {
-            topic: { entries_in_scope: 2, present: 2, parseable: 2 },
-          },
         },
-      ],
+      },
+      freshness: { fresh: true },
+      fallback: { used: false, reason: null },
     },
     errors: [],
   },
@@ -91,32 +93,58 @@ const nodesQuery = {
   isError: false,
 };
 
-const lensQuery = {
-  data: {
-    success: true,
-    schema_version: 'm31.index_tree.v1',
-    command: 'index-tree.lens',
-    generated_at: '2026-05-31T00:00:00Z',
+function navigateQuery(request: { filters?: Array<{ facet: string; values: string[] }> }) {
+  const selected = request.filters?.[0]?.values?.[0];
+  return {
+    data: selected
+      ? {
+          success: true,
+          schema_version: 'm31.index_tree.v1',
+          command: 'index-tree.navigate',
+          generated_at: '2026-05-31T00:00:00Z',
+          data: {
+            truth_source: 'journals',
+            privacy_level: 'same_as_journals',
+            entry_pointers: ['Journals/2026/05/life-index_2026-05-01_001.md'],
+            entries: [
+              {
+                relative_path: 'Journals/2026/05/life-index_2026-05-01_001.md',
+                title: 'Work note',
+              },
+            ],
+            freshness: { fresh: true },
+            fallback: { used: false, reason: null },
+          },
+          errors: [],
+        }
+      : undefined,
+    isLoading: false,
+    isError: false,
+  };
+}
+
+function ensureQuery() {
+  return {
     data: {
-      truth_source: 'journals',
-      privacy_level: 'same_as_journals',
-      signal: 'topic',
-      coverage: { entries_in_scope: 2, present: 2, parseable: 2 },
-      items: [
-        {
-          value: 'work',
-          count: 2,
-          node_refs: [{ type: 'month', node_id: 'month:2026-05' }],
-          evidence_paths: ['Journals/2026/05/life-index_2026-05-01_001.md'],
-          freshness: ['fresh'],
+      success: true,
+      schema_version: 'm31.index_tree.v1',
+      command: 'index-tree.ensure',
+      generated_at: '2026-05-31T00:00:00Z',
+      data: {
+        truth_source: 'journals',
+        freshness: { fresh: false },
+        fallback: {
+          used: true,
+          reason: 'index_b_stale',
+          journal_fallback_pointers: ['Journals/2026/05/life-index_2026-05-01_001.md'],
         },
-      ],
+      },
+      errors: [],
     },
-    errors: [],
-  },
-  isLoading: false,
-  isError: false,
-};
+    isLoading: false,
+    isError: false,
+  };
+}
 
 function shadowQuery(query: string) {
   return {
@@ -147,94 +175,61 @@ function shadowQuery(query: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockUseIndexTreeNodes.mockReturnValue(nodesQuery);
-  mockUseIndexTreeLens.mockReturnValue(lensQuery);
+  mockUseIndexTreeDiscover.mockReturnValue(discoverQuery);
+  mockUseIndexTreeNavigate.mockImplementation(navigateQuery);
+  mockUseIndexTreeEnsure.mockImplementation(ensureQuery);
   mockUseIndexTreeShadow.mockImplementation(shadowQuery);
 });
 
-describe('IndexTreeDiagnostics', () => {
-  it('renders node freshness, entry counts, signal coverage, and evidence refs', () => {
+describe('IndexTreeDiagnostics canonical surface', () => {
+  it('renders discover facets as host/user-selected navigation values', () => {
     renderIndexTreeDiagnostics();
 
-    const nodeCard = screen.getByTestId('index-tree-node-card');
     expect(screen.getByTestId('index-tree-diagnostics-page')).toBeInTheDocument();
     expect(screen.getByText('Index Tree Evidence Navigation')).toBeInTheDocument();
-    expect(nodeCard.textContent).toContain('month:2026-05');
-    expect(nodeCard.textContent).toContain('fresh');
-    expect(nodeCard.textContent).toContain('Entries: 2');
-    expect(nodeCard.textContent).toContain('topic: 2/2');
+    expect(screen.getByText('Host/user selects values; the tool only executes deterministic navigation.')).toBeInTheDocument();
+    expect(screen.getByTestId('index-tree-discover-value').textContent).toContain('work');
+    expect(screen.getByTestId('index-tree-discover-value').textContent).toContain('2');
+    expect(screen.getByText('Journals/2026/05/life-index_2026-05-01_001.md')).toBeInTheDocument();
+  });
+
+  it('uses a discovered facet value to drive navigate and render real journal pointers', () => {
+    renderIndexTreeDiagnostics();
+
+    fireEvent.click(screen.getByRole('button', { name: /work/ }));
+
+    expect(mockUseIndexTreeNavigate).toHaveBeenLastCalledWith({
+      filters: [{ facet: 'topic', values: ['work'] }],
+    });
+    expect(screen.getByTestId('index-tree-navigate-result').textContent).toContain('Work note');
     expect(screen.getByRole('link', { name: /life-index_2026-05-01_001.md/ })).toHaveAttribute(
       'href',
       '/journal/Journals/2026/05/life-index_2026-05-01_001.md',
     );
   });
 
-  it('renders a stable nodes section for an empty nodes response', () => {
-    mockUseIndexTreeNodes.mockReturnValue({
-      ...nodesQuery,
+  it('shows ensure journal fallback when discover reports stale freshness', () => {
+    mockUseIndexTreeDiscover.mockReturnValue({
+      ...discoverQuery,
       data: {
-        ...nodesQuery.data,
+        ...discoverQuery.data,
         data: {
-          ...nodesQuery.data.data,
-          nodes: [],
+          ...discoverQuery.data.data,
+          freshness: { fresh: false },
         },
       },
     });
 
     renderIndexTreeDiagnostics();
 
-    expect(screen.getByText('Nodes')).toBeInTheDocument();
-    expect(screen.queryAllByTestId('index-tree-node-card')).toHaveLength(0);
-    expect(screen.getByText('Lens navigation')).toBeInTheDocument();
+    expect(mockUseIndexTreeEnsure).toHaveBeenCalledWith({}, true);
+    expect(screen.getByTestId('index-tree-fallback').textContent).toContain('index_b_stale');
+    expect(screen.getByTestId('index-tree-fallback').textContent).toContain('life-index_2026-05-01_001.md');
   });
 
-  it('shows loading and unavailable copy for node diagnostics states', () => {
-    mockUseIndexTreeNodes.mockReturnValue({
+  it('shows unavailable copy when discover fails', () => {
+    mockUseIndexTreeDiscover.mockReturnValue({
       data: undefined,
-      isLoading: true,
-      isError: false,
-    });
-
-    const { rerender } = renderIndexTreeDiagnostics();
-
-    expect(screen.getByText('Loading index tree diagnostics...')).toBeInTheDocument();
-
-    mockUseIndexTreeNodes.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: true,
-    });
-
-    rerender(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter>
-          <IndexTreeDiagnostics />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-
-    expect(screen.getByText('Index tree diagnostics unavailable.')).toBeInTheDocument();
-  });
-
-  it('labels lens values as navigation aids instead of truth claims', () => {
-    renderIndexTreeDiagnostics();
-
-    expect(screen.getByText('Lens values are navigation aids with evidence refs, not truth claims.')).toBeInTheDocument();
-    expect(screen.getByTestId('index-tree-lens-item').textContent).toContain('work');
-    expect(screen.getByTestId('index-tree-lens-item').textContent).toContain('month:2026-05');
-    expect(screen.getByText('Journals/2026/05/life-index_2026-05-01_001.md')).toBeInTheDocument();
-  });
-
-  it('shows unavailable copy when lens diagnostics fail', () => {
-    mockUseIndexTreeLens.mockReturnValue({
-      data: {
-        success: false,
-        schema_version: 'm31.index_tree.v1',
-        command: 'index-tree.lens',
-        generated_at: '2026-05-31T00:00:00Z',
-        data: null,
-        errors: [{ code: 'CLI_ERROR', message: 'lens unavailable' }],
-      },
       isLoading: false,
       isError: true,
     });
@@ -242,7 +237,6 @@ describe('IndexTreeDiagnostics', () => {
     renderIndexTreeDiagnostics();
 
     expect(screen.getByText('Index tree diagnostics unavailable.')).toBeInTheDocument();
-    expect(screen.queryByTestId('index-tree-lens-item')).not.toBeInTheDocument();
   });
 
   it('shows shadow as diagnostic-only and preserves search ranking guardrails', () => {
