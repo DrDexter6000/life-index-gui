@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "mobile:acceptance": "npm run build && node scripts/mobile-acceptance-server.mjs",
-    "test": "vitest run",
+    "test": "node scripts/run-vitest.mjs",
     "test:mobile-acceptance-server": "node scripts/mobile-acceptance-server.test.mjs",
     "test:watch": "vitest",
     "smoke:e2e": "node scripts/smoke-e2e.mjs"
