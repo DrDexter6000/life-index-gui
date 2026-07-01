@@ -1,21 +1,18 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
-import ReactECharts from 'echarts-for-react';
-import * as echarts from 'echarts';
-import 'echarts-wordcloud';
 import { GlassCard } from '@/components/celestial/GlassCard';
 import { useTopicDistribution } from '@/hooks/useJournals';
 import { useTranslation } from '@/hooks/useTranslation';
 
 /**
  * TagCloud — 标签词云
- * Uses echarts-wordcloud with topic distribution data.
+ * Uses weighted topic distribution data.
  * Clicking a tag navigates to the Recall search page.
  *
  * DESIGN.md refs:
  * - The Panel Card Voice Rule
- * - The One Gold Rule: gold area ≤10%
- * - tokens.json: colors gold #ffe792, cyan #85fff2, coral #ffb4a6, lavender #C4B6FE
+ * - The One Gold Rule: gold area <=10%
+ * - tokens.json: gold, cyan, coral, lavender, amber, primary
  */
 export function TagCloud() {
   const navigate = useNavigate();
@@ -31,64 +28,34 @@ export function TagCloud() {
   }, [topicData]);
 
   const palette = useMemo(
-    () => ['#ffe792', '#85fff2', '#ffb4a6', '#C4B6FE', '#F9873E', '#e8eaf0'],
+    () => [
+      'var(--color-gold)',
+      'var(--color-cyan)',
+      'var(--color-coral)',
+      'var(--color-lavender)',
+      'var(--color-amber)',
+      'var(--color-primary)',
+    ],
     [],
   );
 
-  const option = useMemo(() => {
-    return {
-      tooltip: {
-        show: true,
-        backgroundColor: 'rgba(18, 22, 30, 0.92)',
-        borderColor: 'rgba(255, 255, 255, 0.08)',
-        textStyle: {
-          color: '#e8eaf0',
-          fontFamily: "'Geist Mono', 'JetBrains Mono', monospace",
-          fontSize: 12,
-        },
-        formatter: (params: { name: string; value: number }) => {
-          return `${params.name}: ${params.value}`;
-        },
-      },
-      series: [
-        {
-          type: 'wordCloud',
-          shape: 'circle',
-          left: 'center',
-          top: 'center',
-          width: '95%',
-          height: '95%',
-          right: null,
-          bottom: null,
-          sizeRange: [12, 36],
-          rotationRange: [-30, 30],
-          rotationStep: 15,
-          gridSize: 10,
-          drawOutOfBound: false,
-          layoutAnimation: true,
-          textStyle: {
-            fontFamily: "'Plus Jakarta Sans', 'Noto Sans SC', ui-sans-serif, system-ui, sans-serif",
-            fontWeight: 500,
-            color: () => palette[Math.floor(Math.random() * palette.length)],
-          },
-          emphasis: {
-            focus: 'self',
-            textStyle: {
-              textShadowBlur: 8,
-              textShadowColor: 'rgba(255, 231, 146, 0.35)',
-            },
-          },
-          data: chartData,
-        } as echarts.SeriesOption,
-      ],
-    };
+  const cloudItems = useMemo(() => {
+    const maxValue = Math.max(...chartData.map((item) => item.value), 1);
+    const rotations = [-8, 5, 0, -5, 8, 0];
+    return chartData.map((item, index) => {
+      const weight = item.value / maxValue;
+      return {
+        ...item,
+        color: palette[index % palette.length],
+        fontSize: 13 + Math.round(weight * 19),
+        opacity: 0.72 + weight * 0.28,
+        rotation: rotations[index % rotations.length],
+      };
+    });
   }, [chartData, palette]);
 
-  const handleChartClick = (params: unknown) => {
-    const p = params as { name?: string };
-    if (p.name) {
-      navigate(`/recall?q=${encodeURIComponent(p.name)}`);
-    }
+  const handleTagClick = (name: string) => {
+    navigate(`/recall?q=${encodeURIComponent(name)}`);
   };
 
   if (isLoading) {
@@ -125,14 +92,27 @@ export function TagCloud() {
         </div>
       </div>
 
-      <div style={{ height: 220 }}>
-        <ReactECharts
-          option={option}
-          style={{ height: '100%', width: '100%' }}
-          onEvents={{
-            click: handleChartClick,
-          }}
-        />
+      <div className="min-h-[220px] rounded-[8px] border border-white/[0.05] bg-white/[0.02] p-4">
+        <div className="flex h-full min-h-[188px] flex-wrap content-center items-center justify-center gap-x-3 gap-y-2">
+          {cloudItems.map((item) => (
+            <button
+              key={item.name}
+              type="button"
+              className="rounded-full px-2 py-1 font-medium transition hover:bg-white/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-gold)]"
+              style={{
+                color: item.color,
+                fontSize: item.fontSize,
+                opacity: item.opacity,
+                transform: `rotate(${item.rotation}deg)`,
+                fontFamily: "'Plus Jakarta Sans', 'Noto Sans SC', ui-sans-serif, system-ui, sans-serif",
+              }}
+              title={`${item.name}: ${item.value}`}
+              onClick={() => handleTagClick(item.name)}
+            >
+              {item.name}
+            </button>
+          ))}
+        </div>
       </div>
     </GlassCard>
   );

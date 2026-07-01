@@ -69,7 +69,6 @@ const JUSTIFIED_EXCEPTIONS: Record<string, string[]> = {
   // These hex values map directly to design tokens: gold #ffe792, cyan #85fff2, coral #ffb4a6,
   // lavender #C4B6FE, amber #F9873E, primary #e8eaf0, secondary #818695.
   'src/components/archives/MonthlyHeatmap.tsx': ['#ffe792', '#85fff2', '#ffb4a6', '#e8eaf0', '#818695'],
-  'src/components/archives/TagCloud.tsx': ['#ffe792', '#85fff2', '#ffb4a6', '#C4B6FE', '#F9873E', '#e8eaf0'],
   'src/components/archives/PeopleGraph.tsx': ['#ffe792', '#85fff2', '#ffb4a6', '#C4B6FE', '#e8eaf0', '#F9873E', '#f0f2f8'],
 };
 

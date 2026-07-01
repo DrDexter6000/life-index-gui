@@ -208,7 +208,7 @@ function ArchivesDashboard() {
         </div>
       </section>
 
-      {/* Tag Cloud — ECharts wordcloud */}
+      {/* Tag Cloud */}
       <section className="mb-4" aria-label={t('tagCloud')}>
         <Suspense fallback={<div className="min-h-[240px]" />}>
           <TagCloud />

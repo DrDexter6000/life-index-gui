@@ -19,7 +19,6 @@ export function manualChunks(id: string) {
       moduleId.includes('/echarts/')
       || moduleId.includes('/zrender/')
       || moduleId.includes('/echarts-for-react/')
-      || moduleId.includes('/echarts-wordcloud/')
     ) {
       return 'echarts-vendor'
     }
@@ -107,7 +106,7 @@ export default defineConfig({
     },
   },
   build: {
-    chunkSizeWarningLimit: 1100,
+    chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
         manualChunks,

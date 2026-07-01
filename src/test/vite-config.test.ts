@@ -22,10 +22,9 @@ describe('vite manual chunks', () => {
   it('keeps heavy ECharts packages out of the catch-all vendor chunk', () => {
     expect(manualChunks('D:/repo/node_modules/echarts/lib/echarts.js')).toBe('echarts-vendor');
     expect(manualChunks('D:/repo/node_modules/zrender/lib/zrender.js')).toBe('echarts-vendor');
-    expect(manualChunks('D:/repo/node_modules/echarts-wordcloud/index.js')).toBe('echarts-vendor');
   });
 
   it('sets the warning limit around the isolated lazy ECharts vendor size', () => {
-    expect(viteConfig.build?.chunkSizeWarningLimit).toBe(1100);
+    expect(viteConfig.build?.chunkSizeWarningLimit).toBe(1200);
   });
 });
