@@ -76,6 +76,10 @@ These screenshots are rendered by the real GUI against sanitized fictional demo 
 </p>
 
 <p align="center">
+  <img src="public/launch/life-index-gui-journal-detail-en.png" alt="Real Life Index GUI journal detail screen with an image attachment in English mode" width="860" />
+</p>
+
+<p align="center">
   <img src="public/launch/life-index-gui-search-results-en.png" alt="Real Life Index GUI search results screen in English mode" width="860" />
 </p>
 
