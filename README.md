@@ -1,60 +1,89 @@
-# Life Index GUI | 人生索引
+<h1 align="center">Life Index GUI | 人生索引</h1>
+
+<p align="center">
+  <em>Your life, indexed. Now visible.</em>
+</p>
 
 <p align="center">
   <strong>Life Index CLI 服务 Agent; Life Index GUI 服务人类用户。</strong><br />
-  把人生档案交给 Agent 打理。GUI 是在那之上、为「人」造的体验层。<br />
-  <a href="README.en.md">English</a> · Apache-2.0 · React + FastAPI · Built on Life Index CLI
+  GUI 是建在 Life Index CLI 地基上的体验层：写入、搜索、回看、AI+ 证据面板和临时移动访问，都以人的使用感为中心。
 </p>
 
 <p align="center">
-  <img src="public/launch/life-index-gui-home-write.svg" alt="Life Index GUI 写入首页演示截图" width="860" />
+  <a href="README.en.md">English</a>
 </p>
 
-## 导航
+<p align="center">
+  <a href="https://github.com/DrDexter6000/life-index-gui/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/DrDexter6000/life-index-gui/actions/workflows/ci.yml/badge.svg" /></a>
+  <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue" />
+  <img alt="React" src="https://img.shields.io/badge/frontend-React-61dafb" />
+  <img alt="FastAPI" src="https://img.shields.io/badge/backend-FastAPI-009688" />
+  <img alt="Built on Life Index CLI" src="https://img.shields.io/badge/built_on-Life_Index_CLI-gold" />
+</p>
 
-[体验](#体验) · [智能](#智能-ai-星轨) · [走出家门](#走出家门) · [快速开始](#快速开始) · [架构](#架构--与-cli-关系)
+<p align="center">
+  <img src="public/launch/life-index-gui-hero-screen.gif" alt="Life Index GUI hero screen 前 5 秒动态演示" width="860" />
+</p>
+
+<p align="center">
+  <a href="#tldr">TL;DR</a> ·
+  <a href="#为什么需要-life-index-gui">为什么需要 GUI</a> ·
+  <a href="#三个承诺">三个承诺</a> ·
+  <a href="#真实界面">真实界面</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#架构--与-cli-关系">架构</a>
+</p>
+
+---
 
 ## TL;DR
 
 Life Index CLI 是给 Agent 的原生工具层；Life Index GUI 是给人类用户的体验层。CLI 负责可靠的数据与能力边界，GUI 负责把写入、搜索、回看、移动访问和 AI+ 结果呈现成一个可以长期使用的界面。
 
-三根支柱：
+```text
+Human -> Life Index GUI -> FastAPI backend -> Life Index CLI -> local archive
+Human -> Life Index GUI -> FastAPI backend -> optional host agent -> Life Index CLI
+```
 
 - **为「人」而造的体验层**：人机共生时代，人类体验同样值得被认真对待。
-- **媲美艺术独立游戏的 UI/UX**：在合理性能开销下追求有审美、有节奏、有沉浸感的个人知识界面。
+- **媲美艺术独立游戏的 UI/UX**：星轨、层级、光感和节奏服务长期回看，而不是把个人档案变成后台表单。
 - **走出家门的移动性**：Agent 留在家中主机上运行，Life Index 通过安全的临时访问路径装进手机。
 
-## 体验
+## 为什么需要 Life Index GUI
 
-Life Index 的底层能力适合 Agent 调用，但人需要可扫描、可停留、可反复使用的界面。GUI 把写入、搜索、归档、维护和 AI+ 回答放在同一个视觉空间里，让人生档案不只是命令输出。
+Life Index 的底层能力适合 Agent 调用，但人需要一个可扫描、可停留、可反复使用的界面。GUI 不是替代 CLI，也不是在本地塞一个“智能系统”；它把 CLI-backed 数据和宿主 agent 的结果呈现出来，让人生档案从命令输出变成可用的日常工具。
+
+| 如果你想要 | 用什么 |
+| --- | --- |
+| 给 agent 一个稳定、确定、可组合的人生档案工具层 | Life Index CLI |
+| 给自己一个写入、搜索、回看和移动访问的界面 | Life Index GUI |
+| 规划、多跳检索、推理、合成、模型选择 | 你的宿主 agent |
+
+## 三个承诺
+
+| 承诺 | 含义 |
+| --- | --- |
+| 人类体验优先 | GUI 服务人类用户：写入安静、搜索可扫、证据可追、移动访问不打断现场记录。 |
+| 忠实边界 | GUI/backend 不直接读写 journals、附件、索引、SQLite 缓存或实体图谱；持久数据访问走 CLI contract。 |
+| 智能归宿主 | AI+ 星轨只发起 handoff 并显示证据、状态、引用和回答；GUI 不内置模型、不选择供应商、不假装自己有心智。 |
+
+## 真实界面
+
+以下截图由真实 GUI 在脱敏演示语料上渲染，不含真实日记内容。
 
 <p align="center">
-  <img src="public/launch/life-index-gui-search-results.svg" alt="Life Index GUI 搜索结果演示截图" width="860" />
-</p>
-
-## UI/UX
-
-Life Index GUI 的目标不是普通后台表单，而是接近艺术独立游戏的体验密度：星轨、层级、光感、节奏和可读性一起服务长期回看。未来会开放更多主题视觉模板与可定制元素。
-
-## 智能 AI+ 星轨
-
-AI+ 星轨把问题交给你的宿主 agent，由宿主 agent 使用 Life Index CLI 检索证据并合成回答。GUI 只负责发起 handoff、显示证据、状态、引用和回答；它不内置模型、不选择供应商、不假装自己有心智。
-
-没接宿主 agent 时，AI+ 会诚实显示 offline / unavailable。写入、关键词搜索和本地浏览仍然可用。
-
-<p align="center">
-  <img src="public/launch/life-index-gui-ai-grounded-panel.svg" alt="Life Index GUI AI+ 有据回答演示截图" width="860" />
+  <img src="public/launch/life-index-gui-home-write.png" alt="Life Index GUI 写入界面真实截图" width="860" />
 </p>
 
 <p align="center">
-  <img src="public/launch/life-index-gui-ai-grounded-flow.gif" alt="Life Index GUI AI+ grounded flow 演示 GIF" width="860" />
+  <img src="public/launch/life-index-gui-search-results.png" alt="Life Index GUI 搜索结果真实截图" width="860" />
 </p>
 
-## 走出家门
+<p align="center">
+  <img src="public/launch/life-index-gui-ai-grounded-panel.png" alt="Life Index GUI AI+ 有据回答真实截图" width="860" />
+</p>
 
-移动性让 Life Index 不只待在桌面。桌面主机继续运行 CLI、GUI backend 和宿主 agent；你可以通过临时 token-gated 公网链接在手机上打开 GUI，记录路上、旅途和生活现场的片段。
-
-公网链接是显式风险操作：目前仅支持 `cloudflared` Quick Tunnel，由仓库内 `scripts/start-mobile-cloudflare-tunnel.ps1` 启动稳定移动服务器并生成一次性 code 保护的临时链接；不支持 SSH/ngrok/frp 路径。用完应立即停止。生成失败时 GUI 会 fail-closed，不暴露半配置入口。
+AI+ 星轨把问题交给你的宿主 agent，由宿主 agent 使用 Life Index CLI 检索证据并合成回答。没接宿主 agent 时，AI+ 会诚实显示 `offline` / `unavailable`；写入、关键词搜索和本地浏览仍然可用。
 
 ## 快速开始
 
@@ -103,6 +132,8 @@ npm run build
 
 ## 手机临时访问
 
+公网链接是显式风险操作：目前仅支持 `cloudflared` Quick Tunnel，不支持 SSH/ngrok/frp 路径。用完应立即停止。生成失败时 GUI 会 fail-closed，不暴露半配置入口。
+
 Windows 用户可以用仓库内的 PowerShell helper 启动稳定移动栈、`cloudflared` Quick Tunnel 和一次性 code：
 
 ```powershell
@@ -138,11 +169,6 @@ cloudflared tunnel --url http://127.0.0.1:5173
 打开 `https://<cloudflared-host>.trycloudflare.com/link?code=<ONE_TIME_CODE>`。这个手动路径仍然只支持 `cloudflared`；不支持 SSH/ngrok/frp。用完后停止三个终端进程。
 
 ## 架构 / 与 CLI 关系
-
-```text
-Human -> Life Index GUI -> FastAPI backend -> Life Index CLI -> local archive
-Human -> Life Index GUI -> FastAPI backend -> optional host agent -> Life Index CLI
-```
 
 - **CLI** 是数据与能力的 SSOT。它面向 Agent，提供确定性的写入、搜索、维护与索引工具。
 - **Host agent** 是智能层。它规划、检索、推理、合成，并选择自己的模型/运行时。
