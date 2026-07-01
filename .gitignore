@@ -5,6 +5,8 @@ node_modules/
 dist/
 build/public-export/
 build/public-export-manifest.*
+build/public-sync-precheck/
+build/public-push-repo/
 
 # Tool caches
 .playwright-mcp/

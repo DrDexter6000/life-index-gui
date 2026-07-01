@@ -101,6 +101,42 @@ http://127.0.0.1:5173
 npm run build
 ```
 
+## 手机临时访问
+
+Windows 用户可以用仓库内的 PowerShell helper 启动稳定移动栈、`cloudflared` Quick Tunnel 和一次性 code：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-mobile-cloudflare-tunnel.ps1
+```
+
+Linux / WSL 原生 shell 目前不直接运行这个 `.ps1` helper。若需要手动走 `cloudflared`，请保留同样的 token-gated 后端约束，分三个终端启动：
+
+```bash
+# 终端 1：生成临时会话值并启动 backend
+SESSION_TOKEN="$(node -e "console.log(crypto.randomBytes(32).toString('base64url'))")"
+ONE_TIME_CODE="$(node -e "console.log(crypto.randomBytes(24).toString('base64url'))")"
+CODE_EXPIRES_AT="$(node -e "console.log(Math.floor(Date.now() / 1000) + 600)")"
+printf 'Open /link?code=%s after cloudflared prints the public host\n' "$ONE_TIME_CODE"
+
+LIFE_INDEX_PUBLIC_LINK_SESSION_TOKEN="$SESSION_TOKEN" \
+LIFE_INDEX_PUBLIC_LINK_ONE_TIME_CODE="$ONE_TIME_CODE" \
+LIFE_INDEX_PUBLIC_LINK_CODE_EXPIRES_AT="$CODE_EXPIRES_AT" \
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+```bash
+# 终端 2：构建并启动稳定 frontend proxy
+npm run build
+node scripts/mobile-acceptance-server.mjs --host 127.0.0.1 --port 5173 --backend http://127.0.0.1:8000 --dist dist
+```
+
+```bash
+# 终端 3：仅用 cloudflared 暴露 frontend proxy
+cloudflared tunnel --url http://127.0.0.1:5173
+```
+
+打开 `https://<cloudflared-host>.trycloudflare.com/link?code=<ONE_TIME_CODE>`。这个手动路径仍然只支持 `cloudflared`；不支持 SSH/ngrok/frp。用完后停止三个终端进程。
+
 ## 架构 / 与 CLI 关系
 
 ```text

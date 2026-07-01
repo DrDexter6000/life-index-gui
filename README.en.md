@@ -101,6 +101,42 @@ Production build:
 npm run build
 ```
 
+## Temporary Phone Access
+
+Windows users can use the bundled PowerShell helper to start the stable mobile stack, `cloudflared` Quick Tunnel, and one-time code:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-mobile-cloudflare-tunnel.ps1
+```
+
+Native Linux / WSL shells do not currently run this `.ps1` helper directly. If you need a manual `cloudflared` path, keep the same token-gated backend constraint and start three terminals:
+
+```bash
+# Terminal 1: generate temporary session values and start the backend
+SESSION_TOKEN="$(node -e "console.log(crypto.randomBytes(32).toString('base64url'))")"
+ONE_TIME_CODE="$(node -e "console.log(crypto.randomBytes(24).toString('base64url'))")"
+CODE_EXPIRES_AT="$(node -e "console.log(Math.floor(Date.now() / 1000) + 600)")"
+printf 'Open /link?code=%s after cloudflared prints the public host\n' "$ONE_TIME_CODE"
+
+LIFE_INDEX_PUBLIC_LINK_SESSION_TOKEN="$SESSION_TOKEN" \
+LIFE_INDEX_PUBLIC_LINK_ONE_TIME_CODE="$ONE_TIME_CODE" \
+LIFE_INDEX_PUBLIC_LINK_CODE_EXPIRES_AT="$CODE_EXPIRES_AT" \
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+```bash
+# Terminal 2: build and start the stable frontend proxy
+npm run build
+node scripts/mobile-acceptance-server.mjs --host 127.0.0.1 --port 5173 --backend http://127.0.0.1:8000 --dist dist
+```
+
+```bash
+# Terminal 3: expose only the frontend proxy through cloudflared
+cloudflared tunnel --url http://127.0.0.1:5173
+```
+
+Open `https://<cloudflared-host>.trycloudflare.com/link?code=<ONE_TIME_CODE>`. This manual path still supports only `cloudflared`; SSH/ngrok/frp are not supported. Stop all three terminal processes when finished.
+
 ## Architecture / CLI Relationship
 
 ```text
