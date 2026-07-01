@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="public/launch/life-index-gui-hero-screen.gif" alt="Life Index GUI hero screen 前 5 秒动态演示" width="860" />
+  <img src="public/launch/life-index-gui-hero-screen.webp" alt="Life Index GUI hero screen 前 5 秒动态演示" width="860" />
 </p>
 
 <p align="center">

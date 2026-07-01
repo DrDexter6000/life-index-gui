@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="public/launch/life-index-gui-hero-screen-en.gif" alt="First five seconds of the Life Index GUI hero screen in English mode" width="860" />
+  <img src="public/launch/life-index-gui-hero-screen-en.webp" alt="First five seconds of the Life Index GUI hero screen in English mode" width="860" />
 </p>
 
 <p align="center">
