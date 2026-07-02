@@ -193,26 +193,26 @@ export function StarweaveConsole({
           </div>
 
           <div className="mt-4 space-y-2">
-            {isOnline ? (
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-[12px] border border-white/[0.08] bg-white/[0.04] px-3 py-3 text-left transition hover:border-[var(--color-amber)]/30 hover:bg-[var(--color-amber)]/10"
-                onClick={onPublicLinkClick}
-              >
-                <span className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[18px] text-[var(--color-amber)]">public</span>
-                  <span>
-                    <span className="block text-sm font-medium text-[var(--color-primary)]">
-                      {t('starweavePublicLinkLabel')}
-                    </span>
-                    <span className="block text-[0.6875rem] uppercase tracking-[0.08em] text-[var(--color-secondary)]">
-                      {t('starweavePublicLinkEn')}
-                    </span>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-[12px] border border-white/[0.08] bg-white/[0.04] px-3 py-3 text-left transition hover:border-[var(--color-amber)]/30 hover:bg-[var(--color-amber)]/10"
+              onClick={onPublicLinkClick}
+            >
+              <span className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[18px] text-[var(--color-amber)]">public</span>
+                <span>
+                  <span className="block text-sm font-medium text-[var(--color-primary)]">
+                    {t('starweavePublicLinkLabel')}
+                  </span>
+                  <span className="block text-[0.6875rem] uppercase tracking-[0.08em] text-[var(--color-secondary)]">
+                    {t('starweavePublicLinkEn')}
                   </span>
                 </span>
-                <span className="material-symbols-outlined text-[18px] text-[var(--color-secondary)]">chevron_right</span>
-              </button>
-            ) : (
+              </span>
+              <span className="material-symbols-outlined text-[18px] text-[var(--color-secondary)]">chevron_right</span>
+            </button>
+
+            {!isOnline && (
               <div className="rounded-[12px] border border-white/[0.08] bg-white/[0.04] px-3 py-3">
                 <p className="text-sm leading-relaxed text-[var(--color-primary)]">
                   {t('starweaveConnectGuideBody')}

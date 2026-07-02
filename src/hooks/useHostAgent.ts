@@ -12,6 +12,7 @@ export type HostAgentStreamPhase =
   | 'idle'
   | 'connecting'
   | 'planning'
+  | 'calling_host_agent'
   | 'searching'
   | 'answering'
   | 'complete'
@@ -50,6 +51,24 @@ export const hostAgentKeys = {
   metadataProposal: () => [...hostAgentKeys.all, 'metadata-proposal'] as const,
   stream: () => [...hostAgentKeys.all, 'stream'] as const,
 };
+
+export function mapHostAgentStreamPhase(rawPhase?: string | null): HostAgentStreamPhase {
+  const normalized = (rawPhase ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!normalized) return 'planning';
+  if (normalized.includes('error') || normalized.includes('fail')) return 'error';
+  if (normalized.includes('complete') || normalized.includes('done')) return 'complete';
+  if (normalized.includes('connect')) return 'connecting';
+  if (normalized.includes('call') || normalized.includes('host_agent') || normalized.includes('runtime')) {
+    return 'calling_host_agent';
+  }
+  if (normalized.includes('search') || normalized.includes('evidence') || normalized.includes('retriev')) {
+    return 'searching';
+  }
+  if (normalized.includes('answer') || normalized.includes('synth') || normalized.includes('write')) {
+    return 'answering';
+  }
+  return 'planning';
+}
 
 export function useHostAgentHealth() {
   return useQuery({
@@ -130,7 +149,7 @@ export function useHostAgentStream() {
         updateTurn({ events: [...collected] });
 
         if (event.type === 'status') {
-          const nextPhase = event.data.phase === 'searching' ? 'searching' : 'planning';
+          const nextPhase = mapHostAgentStreamPhase(event.data.phase);
           setStatus('streaming');
           setPhase(nextPhase);
           setStatusMessage(event.data.message ?? event.data.phase ?? null);

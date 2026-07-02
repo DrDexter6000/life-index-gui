@@ -131,8 +131,12 @@ vi.mock('@/hooks/useTranslation', () => ({
         hostAgentStreamWarming: 'Preparing answer',
         hostAgentStreamStageStatus: 'Preparing stream',
         hostAgentStreamStageEvidence: 'Searching evidence',
+        hostAgentStreamStageScaffold: 'Planning query',
+        hostAgentStreamStageCallingHostAgent: 'Calling Host Agent',
+        hostAgentStreamStageAnswer: 'Writing answer',
         hostAgentStreamEvidenceFound: 'Found {{count}} evidence',
         hostAgentStreamNoEvidence: 'No evidence yet',
+        hostAgentStreamElapsed: '{{seconds}}s elapsed',
         hostAgentStreamErrorTitle: 'Stream failed',
         hostAgentStreamErrorBody: 'The Host Agent could not complete this request.',
         hostAgentThinkingToggle: 'Thinking process',
@@ -294,6 +298,41 @@ describe('Recall', () => {
     expect(screen.queryByTestId('host-agent-stream-stages')).not.toBeInTheDocument();
     expect(screen.getByTestId('host-agent-live-thinking')).toHaveTextContent('今年 SkyVision Africa');
     expect(screen.getByTestId('host-agent-stream-delta')).toHaveTextContent('今年 SkyVision Africa');
+  });
+
+  it('shows Host Agent stream status before any delta arrives', () => {
+    mockHostHealthReturn.data = readyHealth;
+    mockHostStreamReturn.status = 'streaming';
+    mockHostStreamReturn.phase = 'calling_host_agent' as HostAgentStreamPhase;
+    mockHostStreamReturn.statusMessage = 'Calling configured host agent runtime.';
+    mockHostStreamReturn.deltaText = '';
+    mockHostStreamReturn.turns = [
+      {
+        id: 'turn-status',
+        query: '刚刚记录了什么？',
+        status: 'streaming',
+        phase: 'calling_host_agent' as HostAgentStreamPhase,
+        statusMessage: 'Calling configured host agent runtime.',
+        evidencePreview: [],
+        deltaText: '',
+        finalResponse: null,
+        error: null,
+        events: [],
+      },
+    ];
+
+    render(
+      <MemoryRouter>
+        <Recall />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByTestId('tab-agent'));
+
+    const panel = screen.getByTestId('host-agent-stream-panel');
+    expect(panel).toHaveTextContent('Calling Host Agent');
+    expect(panel).toHaveTextContent('Calling configured host agent runtime.');
+    expect(screen.getByTestId('host-agent-stream-delta')).not.toHaveTextContent('Waiting for Host Agent reasoning');
   });
 
   it('renders a two-turn Host Agent conversation with badge, reason, and evidence links', () => {

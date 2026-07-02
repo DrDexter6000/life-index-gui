@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { HostAgentQueryResponse } from '@/lib/api-client';
 import type { HostAgentStreamPhase, HostAgentStreamStatus } from '@/hooks/useHostAgent';
@@ -12,12 +13,48 @@ export interface HostAgentStreamPanelProps {
   error: Error | null;
 }
 
+const PHASE_LABEL_KEYS: Record<HostAgentStreamPhase, string> = {
+  idle: 'hostAgentStreamStageStatus',
+  connecting: 'hostAgentStreamStageStatus',
+  planning: 'hostAgentStreamStageScaffold',
+  calling_host_agent: 'hostAgentStreamStageCallingHostAgent',
+  searching: 'hostAgentStreamStageEvidence',
+  answering: 'hostAgentStreamStageAnswer',
+  complete: 'hostAgentStreamFinalSummary',
+  error: 'hostAgentStreamErrorTitle',
+};
+
 export function HostAgentStreamPanel({
   status,
+  phase,
+  statusMessage,
+  evidenceCount,
   deltaText,
   error,
 }: HostAgentStreamPanelProps) {
   const { t } = useTranslation();
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const streamActive = status === 'connecting' || status === 'streaming';
+
+  useEffect(() => {
+    if (!streamActive) {
+      setElapsedSeconds(0);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    setElapsedSeconds(0);
+    const interval = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [streamActive, phase]);
+
+  const phaseLabel = t(PHASE_LABEL_KEYS[phase] ?? 'hostAgentStreamStageScaffold');
+  const evidenceLabel = evidenceCount > 0
+    ? t('hostAgentStreamEvidenceFound', { count: evidenceCount })
+    : t('hostAgentStreamNoEvidence');
+  const elapsedLabel = t('hostAgentStreamElapsed', { seconds: elapsedSeconds });
+  const displayStatusMessage = useMemo(() => statusMessage?.trim() || phaseLabel, [phaseLabel, statusMessage]);
 
   if (status === 'error') {
     return (
@@ -37,7 +74,7 @@ export function HostAgentStreamPanel({
     );
   }
 
-  const liveThinking = deltaText.trim() || t('hostAgentStreamThinkingPending');
+  const liveThinking = deltaText.trim() || displayStatusMessage;
 
   return (
     <div
@@ -52,6 +89,24 @@ export function HostAgentStreamPanel({
           style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em', textTransform: 'uppercase' }}
         >
           {status === 'connecting' ? t('hostAgentStreamWarming') : t('hostAgentStreamThinking')}
+        </p>
+      </div>
+
+      <div
+        className="mb-3 rounded-2xl p-3"
+        data-testid="host-agent-stream-phase-rail"
+        style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.08)' }}
+      >
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-cyan)]/20 px-2 py-1 text-[0.6875rem] text-[var(--color-cyan)]">
+            <span className="material-symbols-outlined text-[14px]">radio_button_checked</span>
+            {phaseLabel}
+          </span>
+          <span className="text-[0.6875rem] text-[var(--color-muted)]">{evidenceLabel}</span>
+          <span className="text-[0.6875rem] text-[var(--color-muted)]">{elapsedLabel}</span>
+        </div>
+        <p className="text-xs leading-relaxed text-[var(--color-secondary)]">
+          {displayStatusMessage}
         </p>
       </div>
 

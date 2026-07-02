@@ -188,7 +188,7 @@ cloudflared tunnel --url http://127.0.0.1:5173
 ## 架构 / 与 CLI 关系
 
 - **CLI** 是数据与能力的 SSOT。它面向 Agent，提供确定性的写入、搜索、维护与索引工具。
-- **Host agent** 是智能层。它规划、检索、推理、合成，并选择自己的模型/运行时。
+- **Host agent** 是智能层。它规划、检索、推理、合成，并选择自己的模型/运行时；公开 handoff 契约见 [docs/HOST_AGENT_HANDOFF.md](docs/HOST_AGENT_HANDOFF.md)。
 - **GUI** 是体验层。它呈现 CLI-backed 数据，转发 AI+ handoff，显示证据和状态。
 - **数据与程序分离**。GUI/backend 不直接读写 journals、附件、索引、SQLite 缓存、实体图谱或用户数据目录；持久数据访问必须经过 CLI contract。
 
@@ -197,6 +197,7 @@ cloudflared tunnel --url http://127.0.0.1:5173
 - 设计 tokens：[design/tokens.json](design/tokens.json)
 - 架构：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - GUI/CLI contract：[docs/GUI_CLI_CONTRACT.md](docs/GUI_CLI_CONTRACT.md)
+- Host Agent Handoff contract：[docs/HOST_AGENT_HANDOFF.md](docs/HOST_AGENT_HANDOFF.md)
 - 文档索引：[docs/README.md](docs/README.md)
 
 ## License

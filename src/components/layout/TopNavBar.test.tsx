@@ -410,13 +410,23 @@ describe('TopNavBar', () => {
       expect(console.textContent).not.toMatch(/Life Index Mind|model selector|模型选择|LLM 设置|telemetry|遥测|思维共振/i);
     });
 
-    it('opens an offline console with connection guidance and no public-link trigger', async () => {
+    it('opens an offline console with connection guidance and public-link trigger', async () => {
       mocks.hostAgentHealth.data = {
         ...readyHostAgentHealth,
         running: false,
         ready: false,
         reason: 'host-agent-unconfigured',
       };
+      mocks.publicLinkAPI.getStatus.mockResolvedValue({
+        running: false,
+        tunnelUrl: null,
+        oneTimeUrl: null,
+        qrDataUrl: null,
+        frontendUrl: 'http://127.0.0.1:5173',
+        logDir: null,
+        processes: [],
+        warnings: [],
+      });
       render(
         <MemoryRouter initialEntries={['/home']}>
           <TopNavBar />
@@ -429,7 +439,9 @@ describe('TopNavBar', () => {
       expect(within(console).getByText(/离线 OFFLINE|OFFLINE/i)).toBeInTheDocument();
       expect(within(console).getByText(/未检测到宿主 agent|No host agent detected/i)).toBeInTheDocument();
       expect(within(console).getByRole('link', { name: /如何连接宿主 agent|How to connect a host agent/i })).toBeInTheDocument();
-      expect(within(console).queryByRole('button', { name: /公网链接|public link/i })).not.toBeInTheDocument();
+      fireEvent.click(within(console).getByRole('button', { name: /公网链接|public link/i }));
+
+      expect(await screen.findByRole('dialog', { name: /公开链接|public link/i })).toBeInTheDocument();
     });
   });
 

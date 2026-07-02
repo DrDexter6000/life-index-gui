@@ -108,6 +108,10 @@ def _enable_auth_env(token: str = "test-session-token-abc123", code: str = "test
     os.environ["LIFE_INDEX_PUBLIC_LINK_CODE_EXPIRES_AT"] = str(int(time.time()) + 120)
 
 
+def _patch_public_link_preflight():
+    return patch("backend.routers.public_link.public_link_preflight", return_value=None)
+
+
 @pytest.fixture()
 def auth_env():
     _enable_auth_env()
@@ -128,9 +132,36 @@ def test_public_link_start_requires_explicit_risk_acknowledgement():
     assert payload["error"]["code"] == "PUBLIC_LINK_RISK_ACK_REQUIRED"
 
 
+def test_public_link_start_fails_fast_when_cloudflared_missing():
+    """Missing cloudflared must fail before token/code creation or script launch."""
+    def fake_which(command: str) -> str | None:
+        if command == "powershell.exe":
+            return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+        if command == "cloudflared":
+            return None
+        return None
+
+    with (
+        patch("backend.routers.public_link.os.path.isfile", return_value=True),
+        patch("backend.routers.public_link.shutil.which", side_effect=fake_which),
+        patch("backend.routers.public_link.subprocess.run") as run,
+    ):
+        run.return_value = CompletedProcess(args=[], returncode=0, stdout=SCRIPT_OUTPUT, stderr="")
+        response = client.post("/api/public-link/start", json={"accept_risk": True})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["data"]["running"] is False
+    assert payload["data"]["starting"] is False
+    assert payload["data"]["error"]["code"] == "PUBLIC_LINK_CLOUDFLARED_MISSING"
+    run.assert_not_called()
+    assert len(_code_store) == 0
+
+
 def test_public_link_start_reuses_script_to_launch_tunnel_stack():
     """Start always generates token/code and returns oneTimeUrl + qrDataUrl."""
-    with patch("backend.routers.public_link.subprocess.run") as run:
+    with _patch_public_link_preflight(), patch("backend.routers.public_link.subprocess.run") as run:
         run.return_value = CompletedProcess(args=[], returncode=0, stdout=SCRIPT_OUTPUT, stderr="")
         response = client.post("/api/public-link/start", json={"accept_risk": True, "frontend_port": 5173})
 
@@ -176,7 +207,7 @@ def test_public_link_start_reuses_script_to_launch_tunnel_stack():
 
 
 def test_public_link_stop_kills_started_processes_and_clears_status():
-    with patch("backend.routers.public_link.subprocess.run") as run:
+    with _patch_public_link_preflight(), patch("backend.routers.public_link.subprocess.run") as run:
         run.side_effect = [
             CompletedProcess(args=[], returncode=0, stdout=SCRIPT_OUTPUT, stderr=""),
             CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
@@ -215,7 +246,7 @@ def test_public_link_ops_disabled_returns_403():
 
 
 def test_public_link_events_report_ready_after_async_start():
-    with patch("backend.routers.public_link.subprocess.run") as run:
+    with _patch_public_link_preflight(), patch("backend.routers.public_link.subprocess.run") as run:
         run.return_value = CompletedProcess(args=[], returncode=0, stdout=SCRIPT_OUTPUT, stderr="")
         start_response = client.post("/api/public-link/start", json={"accept_risk": True})
         events_response = client.get("/api/public-link/events")
@@ -227,7 +258,7 @@ def test_public_link_events_report_ready_after_async_start():
 
 
 def test_public_link_start_failure_is_fail_closed_and_streams_error():
-    with patch("backend.routers.public_link.subprocess.run") as run:
+    with _patch_public_link_preflight(), patch("backend.routers.public_link.subprocess.run") as run:
         run.return_value = CompletedProcess(args=[], returncode=1, stdout="", stderr="cloudflared missing")
         response = client.post("/api/public-link/start", json={"accept_risk": True})
 
@@ -467,7 +498,7 @@ def test_env_seeded_code_rejects_missing_token():
 
 def test_start_in_auth_mode_is_blocked_by_middleware(auth_env):
     """In auth mode, /api/public-link/* is blocked by middleware."""
-    with patch("backend.routers.public_link.subprocess.run") as run:
+    with _patch_public_link_preflight(), patch("backend.routers.public_link.subprocess.run") as run:
         run.return_value = CompletedProcess(args=[], returncode=0, stdout=SCRIPT_OUTPUT, stderr="")
         response = client.post("/api/public-link/start", json={"accept_risk": True})
 
@@ -477,7 +508,7 @@ def test_start_in_auth_mode_is_blocked_by_middleware(auth_env):
 
 def test_start_without_auth_env_still_generates_token_code_args():
     """Normal start (no auth env) still includes SessionToken/OneTimeCode/CodeExpiresAt."""
-    with patch("backend.routers.public_link.subprocess.run") as run:
+    with _patch_public_link_preflight(), patch("backend.routers.public_link.subprocess.run") as run:
         run.return_value = CompletedProcess(args=[], returncode=0, stdout=SCRIPT_OUTPUT, stderr="")
         response = client.post("/api/public-link/start", json={"accept_risk": True})
 
@@ -528,7 +559,7 @@ def test_start_with_auth_env_calls_set_code_and_generates_qr():
     """Direct call to start_public_link with auth env to test full flow."""
     _enable_auth_env()
 
-    with patch("backend.routers.public_link.subprocess.run") as run:
+    with _patch_public_link_preflight(), patch("backend.routers.public_link.subprocess.run") as run:
         run.return_value = CompletedProcess(args=[], returncode=0, stdout=SCRIPT_OUTPUT, stderr="")
         resp = public_link.start_public_link(body={"accept_risk": True})
 

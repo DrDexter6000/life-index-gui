@@ -202,4 +202,43 @@ describe('useHostAgentStream', () => {
     expect(result.current.turns[0].finalResponse?.reason).toBe('sleep trajectory has zero observations');
     expect(result.current.turns[1].query).toBe('那跟上个月比呢？');
   });
+
+  it('maps calling_host_agent status events to a visible UI phase while waiting for delta', async () => {
+    let releaseStream!: () => void;
+    const holdStream = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    vi.spyOn(hostAgentAPI, 'stream').mockImplementation(async function* () {
+      yield {
+        type: 'status',
+        data: {
+          phase: 'calling_host_agent',
+          message: 'Calling configured host agent runtime.',
+        },
+      };
+      await holdStream;
+      yield { type: 'final', data: partialFinal };
+    });
+
+    const { result } = renderHook(() => useHostAgentStream(), {
+      wrapper: createWrapper(),
+    });
+
+    let startPromise!: Promise<void>;
+    act(() => {
+      startPromise = result.current.start('刚刚记录了什么？');
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe('calling_host_agent'));
+    expect(result.current.status).toBe('streaming');
+    expect(result.current.statusMessage).toBe('Calling configured host agent runtime.');
+    expect(result.current.deltaText).toBe('');
+    expect(result.current.turns[0].phase).toBe('calling_host_agent');
+
+    await act(async () => {
+      releaseStream();
+      await startPromise;
+    });
+    await waitFor(() => expect(result.current.status).toBe('complete'));
+  });
 });

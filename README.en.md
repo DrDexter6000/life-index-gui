@@ -187,7 +187,7 @@ Open `https://<cloudflared-host>.trycloudflare.com/link?code=<ONE_TIME_CODE>`. T
 ## Architecture / CLI Relationship
 
 - **CLI** is the data and capability SSOT. It is built for agents and exposes deterministic writing, search, maintenance, and indexing tools.
-- **Host agent** is the intelligence layer. It plans, retrieves, reasons, synthesizes, and chooses its own model/runtime.
+- **Host agent** is the intelligence layer. It plans, retrieves, reasons, synthesizes, and chooses its own model/runtime; the public handoff contract is in [docs/HOST_AGENT_HANDOFF.md](docs/HOST_AGENT_HANDOFF.md).
 - **GUI** is the experience layer. It presents CLI-backed data, relays AI+ handoff requests, and renders evidence and status.
 - **Data stays separate from program code**. The GUI/backend must not directly read or write journals, attachments, indexes, SQLite caches, entity graph files, or user-data directories. Durable data access goes through the CLI contract.
 
@@ -196,6 +196,7 @@ Open `https://<cloudflared-host>.trycloudflare.com/link?code=<ONE_TIME_CODE>`. T
 - Design tokens: [design/tokens.json](design/tokens.json)
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - GUI/CLI contract: [docs/GUI_CLI_CONTRACT.md](docs/GUI_CLI_CONTRACT.md)
+- Host Agent Handoff contract: [docs/HOST_AGENT_HANDOFF.md](docs/HOST_AGENT_HANDOFF.md)
 - Docs index: [docs/README.md](docs/README.md)
 
 ## License

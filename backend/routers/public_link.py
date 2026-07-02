@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import threading
 import time
@@ -81,6 +82,25 @@ def _public_link_warnings() -> list[str]:
         "For persistent private access, graduate to a named tunnel with Cloudflare Access or another "
         "owner-approved auth layer.",
     ]
+
+
+def public_link_preflight() -> dict[str, str] | None:
+    if not os.path.isfile(SCRIPT_PATH):
+        return {
+            "code": "PUBLIC_LINK_SCRIPT_MISSING",
+            "message": "Public link startup script is missing.",
+        }
+    if shutil.which("powershell.exe") is None:
+        return {
+            "code": "PUBLIC_LINK_POWERSHELL_MISSING",
+            "message": "powershell.exe is required to start the public link tunnel script.",
+        }
+    if shutil.which("cloudflared") is None:
+        return {
+            "code": "PUBLIC_LINK_CLOUDFLARED_MISSING",
+            "message": "cloudflared is required to create a Cloudflare Quick Tunnel.",
+        }
+    return None
 
 
 def _job_id() -> str:
@@ -369,6 +389,22 @@ def start_public_link(
     bridge_port = _body_int(body, "bridge_port", "bridgePort", default=DEFAULT_BRIDGE_PORT)
     wait_seconds = _body_int(body, "wait_seconds", "waitSeconds", default=DEFAULT_WAIT_SECONDS)
     code_expiry = _body_int(body, "code_expiry", "codeExpiry", default=DEFAULT_CODE_EXPIRY)
+
+    preflight_error = public_link_preflight()
+    if preflight_error is not None:
+        job_id = _job_id()
+        now = _now_iso()
+        with _state_lock:
+            _start_job = {
+                "id": job_id,
+                "status": "error",
+                "phase": "preflight_failed",
+                "message": preflight_error["message"],
+                "startedAt": now,
+                "updatedAt": now,
+                "error": preflight_error,
+            }
+        return APIResponse.success(_public_state(False))
 
     # Always generate a fresh session token, one-time code, and absolute expiry
     session_token = secrets.token_urlsafe(32)
