@@ -13,6 +13,7 @@ build/public-push-repo/
 .ruff_cache/
 .sisyphus/
 .experiments/
+.inspiration/
 .kimi/
 .omo/
 .serena/

@@ -40,6 +40,18 @@
 
 Life Index CLI is the native tool layer for agents. Life Index GUI is the experience layer for human users. The CLI owns durable data and deterministic capability boundaries; the GUI turns writing, search, review, mobile access, and AI+ results into an interface people can actually live with.
 
+<p align="center">
+  <img src="public/launch/life-index-gui-poster-quiet-star-ring.png" alt="Life Index GUI product overview poster for writing and mobile browsing" width="860" />
+</p>
+
+<p align="center">
+  <img src="public/launch/life-index-gui-poster-index-constellation.png" alt="Life Index GUI product overview poster for search and AI+ evidence panels" width="860" />
+</p>
+
+<p align="center">
+  <img src="public/launch/life-index-gui-poster-glass-archive.png" alt="Life Index GUI product overview poster for journal review, image attachments, and mobile browsing" width="860" />
+</p>
+
 ```text
 Human -> Life Index GUI -> FastAPI backend -> Life Index CLI -> local archive
 Human -> Life Index GUI -> FastAPI backend -> optional host agent -> Life Index CLI
@@ -69,7 +81,7 @@ The Life Index core is useful to agents, but humans need a surface that is scann
 
 ## Real Interface
 
-These screenshots are rendered by the real GUI against sanitized fictional demo entries. They contain no real journal content.
+These screenshots are rendered by the real GUI against sanitized fictional demo entries.
 
 <p align="center">
   <img src="public/launch/life-index-gui-home-write-en.png" alt="Real Life Index GUI writing screen in English mode" width="860" />
