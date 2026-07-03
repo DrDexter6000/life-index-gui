@@ -2,14 +2,18 @@
 
 Life Index GUI does not contain an LLM, model router, or planner. AI+ is a handoff surface: the GUI/backend forwards bounded requests to a user-provided Host Agent runtime and renders the returned status, evidence, and answer.
 
-This document is the public, runtime-neutral contract for that handoff.
+This document is the public, runtime-neutral contract for that handoff. Any
+bridge implementation may be used if it exposes the interfaces below and passes
+the conformance kit.
 
 ## Roles
 
 - Life Index CLI owns durable data and deterministic tools.
 - Life Index GUI owns human-facing presentation.
 - The Host Agent owns planning, retrieval choices, model choice, reasoning, and synthesis.
-- The reference bridge is an adapter. It proves the protocol shape; it is not required for every runtime.
+- Bridge implementations adapt user-provided host-agent runtimes to the
+  versioned HTTP/SSE contract. The bundled bridge and examples are reference
+  implementations, not required infrastructure.
 
 ## Backend Relay
 
@@ -148,7 +152,22 @@ Response:
 
 The Host Agent must respect `policy.preserve_user_fields=true`. The GUI should present proposals, not silently overwrite user-authored metadata.
 
-## Reference Bridge
+## Bring Your Own Bridge
+
+The GUI backend does not require a specific bridge implementation. It only needs
+one configured Host Agent endpoint:
+
+```text
+LIFE_INDEX_HOST_AGENT_URL=http://127.0.0.1:8791
+```
+
+Your bridge may be the bundled reference bridge, a local service you maintain, or
+another process that implements `GET /health`, `POST /query/stream`, and
+`POST /metadata/propose` with the schema envelopes above. The GUI/backend must
+not select models, inspect query semantics, or synthesize answers on behalf of
+the Host Agent.
+
+## Reference Bridge And Adapters
 
 The optional bridge in `host_agent_bridge/server.py` adapts a local command runtime to the HTTP/SSE contract above.
 
@@ -167,6 +186,45 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
 The example runtime uses no network, model, credentials, or private user data. It only demonstrates the handoff envelope shape.
+
+For an externally configured headless-agent command, use the second
+provider-neutral adapter:
+
+```bash
+export LIFE_INDEX_HOST_AGENT_ARGV_JSON='["python","examples/host-agent-runtime/command-json-adapter/command_json_adapter.py"]'
+export LIFE_INDEX_HOST_AGENT_ADAPTER_ARGV_JSON='["/path/to/your/headless-agent-json-command"]'
+python -m uvicorn host_agent_bridge.server:app --host 127.0.0.1 --port 8791
+```
+
+The command JSON adapter extracts the bridge request JSON, spawns only the
+command configured by the user, and accepts only the same
+`gui.host_agent.query_response.v1` / `gui.host_agent.metadata_proposal.v1`
+envelopes. It ships no model, SDK, API key, default provider, or bundled agent.
+
+## Conformance Kit
+
+Run the reusable conformance kit against any bridge before pointing the GUI at
+it:
+
+```bash
+python -m host_agent_bridge.conformance --base-url http://127.0.0.1:8791 --expect ready
+```
+
+For a bridge that is reachable but whose user-configured runtime is intentionally
+absent during setup checks, use `--expect runtime-unavailable`.
+
+The kit checks:
+
+- `GET /health` returns `gui.host_agent.health.v1` readiness or honest
+  unavailable state.
+- `POST /query/stream` emits status and exactly one final
+  `gui.host_agent.query_response.v1` envelope.
+- `GROUNDED` query responses contain structured `evidence[]`; `UNGROUNDED`
+  responses do not.
+- `POST /metadata/propose` returns a valid
+  `gui.host_agent.metadata_proposal.v1` envelope.
+- Missing or unavailable runtimes produce explicit `UNAVAILABLE` envelopes
+  instead of fabricated answers.
 
 ## Failure Behavior
 
