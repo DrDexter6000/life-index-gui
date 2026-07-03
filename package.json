@@ -13,7 +13,10 @@
     "mobile:acceptance": "npm run build && node scripts/mobile-acceptance-server.mjs",
     "test": "node scripts/run-vitest.mjs",
     "test:mobile-acceptance-server": "node scripts/mobile-acceptance-server.test.mjs",
+    "test:agent-ops-stack": "node scripts/agent-ops-stack.test.mjs",
     "test:watch": "vitest",
+    "verify-stack": "node scripts/verify-stack.mjs",
+    "stop-all": "node scripts/stop-all.mjs",
     "smoke:e2e": "node scripts/smoke-e2e.mjs"
   },
   "dependencies": {

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from backend.adapter.cli_adapter import CLIAdapter
 from backend.models.response import APIResponse
+from backend.version_info import compatibility_version_payload, enrich_handshake_version
 
 router = APIRouter(tags=["health"])
 
@@ -15,7 +16,13 @@ def get_cli() -> CLIAdapter:
 @router.get("/health")
 async def health_check(cli: CLIAdapter = Depends(get_cli)) -> APIResponse:
     """Verify FastAPI is running and the stable CLI contract is reachable."""
-    return APIResponse.success(await cli.handshake())
+    return APIResponse.success(enrich_handshake_version(await cli.handshake()))
+
+
+@router.get("/version")
+async def version_check(cli: CLIAdapter = Depends(get_cli)) -> APIResponse:
+    """Return the single GUI/CLI compatibility version surface."""
+    return APIResponse.success(compatibility_version_payload(await cli.handshake()))
 
 
 @router.get("/health/data-audit")

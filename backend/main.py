@@ -19,6 +19,7 @@ from PIL import Image, UnidentifiedImageError
 from backend.adapter.cli_adapter import CLIAdapter, CLIError
 from backend import config
 from backend.models.response import APIResponse
+from backend.version_info import get_gui_version
 from backend.public_link_auth import (
     auth_env_complete,
     auth_env_enabled,
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Life Index GUI Backend",
-    version="0.1.0",
+    version=get_gui_version(),
     description="API layer between GUI frontend and v1.x CLI",
 )
 
@@ -532,4 +533,4 @@ def _attachment_header_percent_encode(value: str) -> str:
 
 @app.get("/api")
 async def api_root() -> dict:
-    return {"name": "Life Index GUI Backend", "version": "0.1.0"}
+    return {"name": "Life Index GUI Backend", "version": get_gui_version()}

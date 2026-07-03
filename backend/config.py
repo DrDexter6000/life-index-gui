@@ -1,6 +1,19 @@
 """Backend configuration — loaded from environment variables with sensible defaults."""
 
+import json
 import os
+from pathlib import Path
+
+
+def _load_package_version() -> str:
+    package_path = Path(__file__).resolve().parents[1] / "package.json"
+    try:
+        return str(json.loads(package_path.read_text(encoding="utf-8")).get("version") or "0.0.0")
+    except (OSError, json.JSONDecodeError):
+        return "0.0.0"
+
+
+GUI_VERSION: str = os.environ.get("LIFE_INDEX_GUI_VERSION", _load_package_version())
 
 # CLI
 CLI_COMMAND: str = os.environ.get("LIFE_INDEX_CLI", "life-index")
