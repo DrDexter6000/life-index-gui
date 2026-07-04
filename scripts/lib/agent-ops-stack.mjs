@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { resolvePythonCommand } from './python-interpreter.mjs';
 
 export const DEFAULT_BACKEND_PORT = 8000;
 export const DEFAULT_FRONTEND_PORT = 5173;
@@ -78,11 +79,12 @@ export function createLaunchCommands({
   repoRoot,
   backendPort = DEFAULT_BACKEND_PORT,
   frontendPort = DEFAULT_FRONTEND_PORT,
+  pythonCommand,
 } = {}) {
   const root = resolve(repoRoot ?? process.cwd());
   return {
     backend: {
-      command: process.env.PYTHON || 'python',
+      command: pythonCommand ?? resolvePythonCommand({ repoRoot: root }),
       args: [
         '-m',
         'uvicorn',

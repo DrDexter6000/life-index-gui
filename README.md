@@ -5,6 +5,10 @@
 </p>
 
 <p align="center">
+  若你是宿主 agent（Hermes / Claude Code 等），请先读 <a href="docs/AGENT_UPDATE_PLAYBOOK.md">docs/AGENT_UPDATE_PLAYBOOK.md</a>。
+</p>
+
+<p align="center">
   <strong>Life Index CLI 服务 Agent; Life Index GUI 服务人类用户。</strong><br />
   GUI 是建在 Life Index CLI 地基上的体验层：写入、搜索、回看、AI+ 证据面板和临时移动访问，都以人的使用感为中心。
 </p>

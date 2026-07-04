@@ -10,6 +10,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { resolvePythonCommand } from './lib/python-interpreter.mjs';
 
 const BACKEND_PORT = Number(process.env.BACKEND_PORT || 18000);
 const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 15173);
@@ -19,6 +20,7 @@ const READINESS_TIMEOUT_MS = 45_000;
 const READINESS_INTERVAL_MS = 1_000;
 const ARTIFACTS_DIR = resolve(process.cwd(), '.tmp', 'smoke-e2e');
 const VITE_BIN = resolve(process.cwd(), 'node_modules', 'vite', 'bin', 'vite.js');
+const PYTHON_BIN = resolvePythonCommand({ repoRoot: process.cwd() });
 
 const ROUTES = [
   '/',
@@ -92,7 +94,7 @@ async function main() {
 
     const backend = spawnLogged(
       'backend',
-      'python',
+      PYTHON_BIN,
       [
         '-m',
         'uvicorn',

@@ -8,7 +8,7 @@ param(
   [int]$FrontendPort = 5173,
   [int]$BackendPort = 8021,
   [int]$BridgePort = 8791,
-  [string]$PythonPath = "python",
+  [string]$PythonPath = "",
   [string]$NpmPath = "npm",
   [string]$CloudflaredPath = "cloudflared",
   [string]$NodePath = "",
@@ -70,6 +70,28 @@ function Get-EnvOrDefault {
     return $Default
   }
   return $value
+}
+
+function Resolve-PythonPath {
+  param(
+    [string]$Requested,
+    [string]$Root
+  )
+
+  if (![string]::IsNullOrWhiteSpace($Requested)) {
+    return $Requested
+  }
+
+  if (![string]::IsNullOrWhiteSpace($env:PYTHON)) {
+    return $env:PYTHON
+  }
+
+  $venvPython = Join-Path $Root ".venv\Scripts\python.exe"
+  if (Test-Path -LiteralPath $venvPython) {
+    return $venvPython
+  }
+
+  return "python"
 }
 
 function New-LaunchPlan {
@@ -387,6 +409,7 @@ function Test-TunnelUrlReachability {
   return $result
 }
 
+$PythonPath = Resolve-PythonPath -Requested $PythonPath -Root $RepoRoot
 $plan = New-LaunchPlan
 
 if ($DryRun) {

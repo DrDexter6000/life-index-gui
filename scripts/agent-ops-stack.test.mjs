@@ -63,6 +63,16 @@ assert.deepEqual(parseSsPids('LISTEN 0 511 127.0.0.1:8000 0.0.0.0:* users:(("pyt
 const launch = createLaunchCommands({ repoRoot, backendPort: 8000, frontendPort: 5173 });
 assert.ok(launch.backend.args.includes('--app-dir'));
 assert.ok(launch.backend.args.includes(repoRoot));
+assert.equal(
+  createLaunchCommands({
+    repoRoot,
+    backendPort: 8000,
+    frontendPort: 5173,
+    pythonCommand: 'python-from-resolver',
+  }).backend.command,
+  'python-from-resolver',
+  'verify-stack backend launch command must accept the shared python resolver output',
+);
 assert.ok(launch.frontend.args.includes('--config'));
 assert.ok(launch.frontend.args.some((arg) => arg.endsWith('vite.config.ts')));
 

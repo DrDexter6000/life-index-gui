@@ -5,6 +5,10 @@
 </p>
 
 <p align="center">
+  If you are a host agent (Hermes / Claude Code / similar), read <a href="docs/AGENT_UPDATE_PLAYBOOK.md">docs/AGENT_UPDATE_PLAYBOOK.md</a> first.
+</p>
+
+<p align="center">
   <strong>Life Index CLI serves your agent. Life Index GUI serves you.</strong><br />
   The GUI is the human experience layer built on the Life Index CLI foundation: writing, search, review, AI+ evidence panels, and temporary mobile access.
 </p>

@@ -38,7 +38,10 @@ describe('default backend port contract', () => {
     const packageJson = JSON.parse(readRepoFile('package.json')) as {
       scripts?: Record<string, string>;
     };
-    expect(packageJson.scripts?.['dev:backend']).toContain(`--port ${CANONICAL_BACKEND_PORT}`);
+    expect(packageJson.scripts?.['dev:backend']).toBe('node scripts/dev-backend.mjs');
+    const devBackend = readRepoFile('scripts/dev-backend.mjs');
+    expect(devBackend).toContain("'--port'");
+    expect(devBackend).toContain(`'${CANONICAL_BACKEND_PORT}'`);
 
     const envExample = readRepoFile('.env.example');
     expect(envExample).toContain(`BACKEND_PORT=${CANONICAL_BACKEND_PORT}`);
