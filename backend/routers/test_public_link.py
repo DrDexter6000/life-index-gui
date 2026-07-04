@@ -45,6 +45,9 @@ AUTH_ENV_KEYS = (
 @pytest.fixture(autouse=True)
 def clear_all_env_and_state():
     """Wipe tunnel state, code store, and all relevant env vars before each test."""
+    if public_link._expiry_timer is not None:
+        public_link._expiry_timer.cancel()
+        public_link._expiry_timer = None
     public_link._active_tunnel = None
     public_link._start_job = None
     public_link.EVENT_POLL_SECONDS = 0.01
@@ -54,6 +57,9 @@ def clear_all_env_and_state():
     for key in AUTH_ENV_KEYS:
         saved[key] = os.environ.pop(key, None)
     yield
+    if public_link._expiry_timer is not None:
+        public_link._expiry_timer.cancel()
+        public_link._expiry_timer = None
     public_link._active_tunnel = None
     public_link._start_job = None
     _code_store.clear()
@@ -157,6 +163,12 @@ def test_public_link_start_fails_fast_when_cloudflared_missing():
     assert payload["data"]["error"]["code"] == "PUBLIC_LINK_CLOUDFLARED_MISSING"
     run.assert_not_called()
     assert len(_code_store) == 0
+    assert payload["data"]["schema_version"] == "gui.remote_link.v1"
+    assert payload["data"]["status"] == "error"
+    assert payload["data"]["url"] is None
+    assert payload["data"]["one_time_code"] is None
+    assert payload["data"]["expires_at"] is None
+    assert payload["data"]["code_expires_at"] is None
 
 
 def test_public_link_start_reuses_script_to_launch_tunnel_stack():
@@ -204,6 +216,57 @@ def test_public_link_start_reuses_script_to_launch_tunnel_stack():
     assert "-SessionToken" in command
     assert "-OneTimeCode" in command
     assert "-CodeExpiresAt" in command
+
+
+def test_public_link_ready_state_exposes_remote_link_v1_contract():
+    with _patch_public_link_preflight(), patch("backend.routers.public_link.subprocess.run") as run:
+        run.return_value = CompletedProcess(args=[], returncode=0, stdout=SCRIPT_OUTPUT, stderr="")
+        response = client.post(
+            "/api/public-link/start",
+            json={"accept_risk": True, "frontend_port": 5173, "code_expiry": 30, "tunnel_ttl_seconds": 60},
+        )
+
+    assert response.status_code == 200
+    ready = _wait_for_public_link_ready()
+    assert ready["schema_version"] == "gui.remote_link.v1"
+    assert ready["status"] == "online"
+    assert ready["url"] == "https://phone-test.trycloudflare.com"
+    assert ready["one_time_code"]
+    assert ready["one_time_code"] in ready["oneTimeUrl"]
+    assert ready["expires_at"]
+    assert ready["code_expires_at"]
+    assert 0 < ready["remaining_ttl_seconds"] <= 60
+    assert ready["qr"] == ready["qrDataUrl"]
+
+
+def test_public_link_status_expires_tunnel_after_ttl():
+    public_link._active_tunnel = {
+        "tunnelUrl": "https://expired.trycloudflare.com",
+        "frontendUrl": "http://127.0.0.1:5173",
+        "logDir": ".tmp/mobile-tunnel-logs/expired",
+        "processes": [{"name": "cloudflared", "pid": 4321}],
+        "startedAt": "2026-07-03T00:00:00+00:00",
+        "expiresAtEpoch": time.time() - 1,
+        "expiresAt": "2026-07-03T00:00:01+00:00",
+        "warnings": [],
+        "oneTimeUrl": "https://expired.trycloudflare.com/link?code=expired",
+        "oneTimeCode": "expired",
+        "codeExpiresAt": "2026-07-03T00:01:00+00:00",
+        "qrDataUrl": None,
+    }
+
+    with patch("backend.routers.public_link.subprocess.run") as run:
+        response = client.get("/api/public-link/status")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["schema_version"] == "gui.remote_link.v1"
+    assert data["status"] == "offline"
+    assert data["running"] is False
+    assert data["url"] is None
+    assert public_link._active_tunnel is None
+    run.assert_called_once()
+    assert run.call_args.args[0][:3] == ["taskkill", "/PID", "4321"]
 
 
 def test_public_link_stop_kills_started_processes_and_clears_status():

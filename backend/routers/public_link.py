@@ -34,15 +34,22 @@ DEFAULT_BACKEND_PORT = int(os.environ.get("LIFE_INDEX_PUBLIC_LINK_BACKEND_PORT",
 DEFAULT_BRIDGE_PORT = int(os.environ.get("LIFE_INDEX_PUBLIC_LINK_BRIDGE_PORT", "18791"))
 DEFAULT_WAIT_SECONDS = int(os.environ.get("LIFE_INDEX_PUBLIC_LINK_WAIT_SECONDS", "120"))
 DEFAULT_CODE_EXPIRY = int(os.environ.get("LIFE_INDEX_PUBLIC_LINK_CODE_EXPIRY", "120"))
+DEFAULT_TUNNEL_TTL_SECONDS = int(os.environ.get("LIFE_INDEX_REMOTE_LINK_TTL_SECONDS", str(12 * 60 * 60)))
 EVENT_POLL_SECONDS = float(os.environ.get("LIFE_INDEX_PUBLIC_LINK_EVENT_POLL_SECONDS", "1"))
+REMOTE_LINK_SCHEMA_VERSION = "gui.remote_link.v1"
 
 _active_tunnel: dict[str, Any] | None = None
 _start_job: dict[str, Any] | None = None
+_expiry_timer: threading.Timer | None = None
 _state_lock = threading.Lock()
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _iso_from_epoch(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
 
 
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -70,6 +77,30 @@ def _body_int(body: dict[str, Any], *names: str, default: int) -> int:
         if parsed > 0:
             return parsed
     return default
+
+
+def _remote_contract_fields(
+    *,
+    status: str,
+    url: str | None = None,
+    one_time_code: str | None = None,
+    expires_at: str | None = None,
+    code_expires_at: str | None = None,
+    qr: str | None = None,
+    error: dict[str, str] | None = None,
+    remaining_ttl_seconds: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": REMOTE_LINK_SCHEMA_VERSION,
+        "status": status,
+        "url": url,
+        "one_time_code": one_time_code,
+        "expires_at": expires_at,
+        "code_expires_at": code_expires_at,
+        "remaining_ttl_seconds": remaining_ttl_seconds,
+        "qr": qr,
+        "error": error,
+    }
 
 
 def _public_link_warnings() -> list[str]:
@@ -143,6 +174,61 @@ def _fail_start_job(job_id: str, code: str, message: str) -> None:
     )
 
 
+def _stop_processes(processes: list[dict[str, Any]]) -> None:
+    for process in reversed(processes):
+        pid = process.get("pid")
+        if not isinstance(pid, int):
+            continue
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True, timeout=10)
+
+
+def _cancel_expiry_timer() -> None:
+    global _expiry_timer
+    if _expiry_timer is not None:
+        _expiry_timer.cancel()
+        _expiry_timer = None
+
+
+def _clear_tunnel_state() -> None:
+    global _active_tunnel, _start_job
+    with _state_lock:
+        _active_tunnel = None
+        _start_job = None
+    _cancel_expiry_timer()
+    clear_code_store()
+
+
+def _expire_active_tunnel_if_needed() -> None:
+    with _state_lock:
+        active = dict(_active_tunnel) if _active_tunnel is not None else None
+    if active is None:
+        return
+    try:
+        expires_at_epoch = float(active.get("expiresAtEpoch"))
+    except (TypeError, ValueError):
+        return
+    if expires_at_epoch > time.time():
+        return
+    _stop_processes(active.get("processes", []))
+    _clear_tunnel_state()
+
+
+def _expire_tunnel_job(job_id: str) -> None:
+    with _state_lock:
+        job_matches = _start_job is not None and _start_job.get("id") == job_id
+    if job_matches:
+        _expire_active_tunnel_if_needed()
+
+
+def _schedule_tunnel_expiry(job_id: str, expires_at_epoch: float) -> None:
+    global _expiry_timer
+    _cancel_expiry_timer()
+    delay = max(0.0, expires_at_epoch - time.time())
+    _expiry_timer = threading.Timer(delay, _expire_tunnel_job, args=(job_id,))
+    _expiry_timer.daemon = True
+    _expiry_timer.start()
+
+
 def _public_state(running: bool = False) -> dict[str, Any]:
     with _state_lock:
         active = dict(_active_tunnel) if _active_tunnel is not None else None
@@ -150,6 +236,8 @@ def _public_state(running: bool = False) -> dict[str, Any]:
 
     if not running or active is None:
         starting = job is not None and job.get("status") == "starting"
+        error = job.get("error") if job and job.get("status") == "error" else None
+        status = "starting" if starting else "error" if error else "offline"
         return {
             "running": False,
             "tunnelUrl": None,
@@ -164,8 +252,13 @@ def _public_state(running: bool = False) -> dict[str, Any]:
             "startJobId": job.get("id") if job else None,
             "phase": job.get("phase") if job else None,
             "message": job.get("message") if job else None,
-            "error": job.get("error") if job and job.get("status") == "error" else None,
+            "error": error,
+            **_remote_contract_fields(status=status, error=error),
         }
+    expires_at_epoch = active.get("expiresAtEpoch")
+    remaining_ttl_seconds = None
+    if isinstance(expires_at_epoch, (int, float)):
+        remaining_ttl_seconds = max(0, int(expires_at_epoch - time.time()))
     state = {
         "running": True,
         "tunnelUrl": active.get("tunnelUrl"),
@@ -175,12 +268,25 @@ def _public_state(running: bool = False) -> dict[str, Any]:
         "startedAt": active.get("startedAt"),
         "warnings": active.get("warnings", _public_link_warnings()),
         "oneTimeUrl": active.get("oneTimeUrl"),
+        "oneTimeCode": active.get("oneTimeCode"),
         "qrDataUrl": active.get("qrDataUrl"),
+        "expiresAt": active.get("expiresAt"),
+        "codeExpiresAt": active.get("codeExpiresAt"),
+        "remainingTtlSeconds": remaining_ttl_seconds,
         "starting": False,
         "startJobId": job.get("id") if job else None,
         "phase": "ready",
         "message": "Public link ready.",
         "error": None,
+        **_remote_contract_fields(
+            status="online",
+            url=active.get("tunnelUrl"),
+            one_time_code=active.get("oneTimeCode"),
+            expires_at=active.get("expiresAt"),
+            code_expires_at=active.get("codeExpiresAt"),
+            qr=active.get("qrDataUrl"),
+            remaining_ttl_seconds=remaining_ttl_seconds,
+        ),
     }
     return state
 
@@ -269,7 +375,15 @@ def _sse_frame(event_type: str, data: dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {text}\n\n"
 
 
-def _run_start_job(job_id: str, command: list[str], wait_seconds: int, one_time_code: str) -> None:
+def _run_start_job(
+    job_id: str,
+    command: list[str],
+    wait_seconds: int,
+    one_time_code: str,
+    *,
+    tunnel_expires_at: float,
+    code_expires_at: float,
+) -> None:
     global _active_tunnel
 
     _update_start_job(
@@ -322,8 +436,13 @@ def _run_start_job(job_id: str, command: list[str], wait_seconds: int, one_time_
         "logDir": script_payload.get("logDir"),
         "processes": processes,
         "startedAt": _now_iso(),
+        "expiresAtEpoch": tunnel_expires_at,
+        "expiresAt": _iso_from_epoch(tunnel_expires_at),
         "warnings": _public_link_warnings(),
         "oneTimeUrl": one_time_url,
+        "oneTimeCode": one_time_code,
+        "codeExpiresAtEpoch": code_expires_at,
+        "codeExpiresAt": _iso_from_epoch(code_expires_at),
         "qrDataUrl": qr_data_url,
     }
 
@@ -339,10 +458,12 @@ def _run_start_job(job_id: str, command: list[str], wait_seconds: int, one_time_
             "updatedAt": _now_iso(),
             "error": None,
         })
+    _schedule_tunnel_expiry(job_id, tunnel_expires_at)
 
 
 @router.get("/status")
 def public_link_status() -> APIResponse[dict[str, Any]]:
+    _expire_active_tunnel_if_needed()
     return APIResponse.success(_public_state(_active_tunnel is not None))
 
 
@@ -350,6 +471,7 @@ def public_link_status() -> APIResponse[dict[str, Any]]:
 async def public_link_events():
     async def event_generator() -> AsyncIterator[str]:
         while True:
+            _expire_active_tunnel_if_needed()
             state = _public_state(_active_tunnel is not None)
             if state.get("error"):
                 yield _sse_frame("error", state)
@@ -377,6 +499,7 @@ def start_public_link(
     if not _body_bool(body, "accept_risk", "acceptRisk"):
         return _error(400, "PUBLIC_LINK_RISK_ACK_REQUIRED", "Explicit public exposure acknowledgement is required.")
 
+    _expire_active_tunnel_if_needed()
     if _active_tunnel is not None:
         return APIResponse.success(_public_state(True))
 
@@ -389,6 +512,12 @@ def start_public_link(
     bridge_port = _body_int(body, "bridge_port", "bridgePort", default=DEFAULT_BRIDGE_PORT)
     wait_seconds = _body_int(body, "wait_seconds", "waitSeconds", default=DEFAULT_WAIT_SECONDS)
     code_expiry = _body_int(body, "code_expiry", "codeExpiry", default=DEFAULT_CODE_EXPIRY)
+    tunnel_ttl = _body_int(
+        body,
+        "tunnel_ttl_seconds",
+        "tunnelTtlSeconds",
+        default=DEFAULT_TUNNEL_TTL_SECONDS,
+    )
 
     preflight_error = public_link_preflight()
     if preflight_error is not None:
@@ -410,6 +539,7 @@ def start_public_link(
     session_token = secrets.token_urlsafe(32)
     one_time_code = secrets.token_urlsafe(24)
     code_expires_at = time.time() + code_expiry
+    tunnel_expires_at = time.time() + tunnel_ttl
 
     # Store code locally for the main backend's in-memory validation path
     set_code(one_time_code, expires_in=code_expiry)
@@ -436,6 +566,10 @@ def start_public_link(
     thread = threading.Thread(
         target=_run_start_job,
         args=(job_id, command, wait_seconds, one_time_code),
+        kwargs={
+            "tunnel_expires_at": tunnel_expires_at,
+            "code_expires_at": code_expires_at,
+        },
         name=f"public-link-start-{job_id}",
         daemon=True,
     )
@@ -445,22 +579,16 @@ def start_public_link(
 
 @router.post("/stop")
 def stop_public_link():
-    global _active_tunnel, _start_job
-
     if _ops_disabled():
         return _error(403, "PUBLIC_LINK_OPS_DISABLED", "Public link controls are disabled for this backend process.")
 
+    _expire_active_tunnel_if_needed()
     if _active_tunnel is None:
         return APIResponse.success(_public_state(False))
 
-    for process in reversed(_active_tunnel.get("processes", [])):
-        pid = process.get("pid")
-        if not isinstance(pid, int):
-            continue
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True, timeout=10)
-
     with _state_lock:
-        _active_tunnel = None
-        _start_job = None
-    clear_code_store()
+        active = dict(_active_tunnel) if _active_tunnel is not None else None
+    if active is not None:
+        _stop_processes(active.get("processes", []))
+    _clear_tunnel_state()
     return APIResponse.success(_public_state(False))

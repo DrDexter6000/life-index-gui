@@ -151,7 +151,17 @@ npm run build
 
 公网链接是显式风险操作：目前仅支持 `cloudflared` Quick Tunnel，不支持 SSH/ngrok/frp 路径。用完应立即停止。生成失败时 GUI 会 fail-closed，不暴露半配置入口。
 
-Windows 用户可以用仓库内的 PowerShell helper 启动稳定移动栈、`cloudflared` Quick Tunnel 和一次性 code：
+宿主 agent / 无头入口可以直接运行：
+
+```bash
+npm run remote-link:start
+npm run remote-link:status
+npm run remote-link:stop
+```
+
+`remote-link:start` 会先验证本地 GUI 栈，再复用桌面按钮同一套后端 public-link 逻辑，输出 `gui.remote_link.v1` JSON。把其中的 `url` 和 `one_time_code` 转达给用户即可；`expires_at` 是隧道 TTL，`code_expires_at` 是一次性码过期时间。控制面仍留在本机，公网隧道只通向门后的 GUI 数据面。
+
+Windows 用户也可以用仓库内的 PowerShell helper 启动稳定移动栈、`cloudflared` Quick Tunnel 和一次性 code：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-mobile-cloudflare-tunnel.ps1

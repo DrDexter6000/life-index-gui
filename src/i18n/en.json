@@ -296,6 +296,8 @@
   "publicLinkStartFailed": "Public link failed to start.",
   "publicLinkStopFailed": "Public link failed to stop.",
   "publicLinkQrAlt": "QR code for one-time access link",
+  "publicLinkOneTimeCode": "One-time code",
+  "publicLinkExpiresAt": "Tunnel expires",
   "publicLinkExchangeLoading": "Authenticating…",
   "publicLinkExchangeNoCode": "No access code found. Open this page by scanning the QR code from the desktop app.",
   "publicLinkExchangeFailed": "Authentication failed. The link may have expired or already been used.",

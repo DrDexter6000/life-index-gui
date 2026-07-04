@@ -296,6 +296,8 @@
   "publicLinkStartFailed": "公开链接启动失败。",
   "publicLinkStopFailed": "公开链接停止失败。",
   "publicLinkQrAlt": "一次性访问链接的二维码",
+  "publicLinkOneTimeCode": "一次性码",
+  "publicLinkExpiresAt": "隧道到期",
   "publicLinkExchangeLoading": "正在验证…",
   "publicLinkExchangeNoCode": "未找到访问码。请通过桌面端扫码打开此页面。",
   "publicLinkExchangeFailed": "验证失败，链接可能已过期或已被使用。",

@@ -150,7 +150,22 @@ npm run build
 
 Public links are explicit risk operations. They currently support only `cloudflared` Quick Tunnel; SSH/ngrok/frp paths are not supported. Stop the link when you are done. If generation fails, the GUI fails closed instead of exposing a half-configured link.
 
-Windows users can use the bundled PowerShell helper to start the stable mobile stack, `cloudflared` Quick Tunnel, and one-time code:
+Host agents and headless sessions can run:
+
+```bash
+npm run remote-link:start
+npm run remote-link:status
+npm run remote-link:stop
+```
+
+`remote-link:start` verifies the local GUI stack, then reuses the same backend
+public-link logic as the desktop button and prints a `gui.remote_link.v1` JSON
+envelope. Relay `url` and `one_time_code` to the user. `expires_at` is the
+tunnel TTL; `code_expires_at` is the short-lived one-time code expiry. Control
+operations remain local; the public tunnel reaches only the token-gated GUI data
+plane.
+
+Windows users can also use the bundled PowerShell helper to start the stable mobile stack, `cloudflared` Quick Tunnel, and one-time code:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-mobile-cloudflare-tunnel.ps1

@@ -512,10 +512,20 @@ describe('TopNavBar', () => {
 
     it('starts the tunnel after acknowledgement and displays the phone URL', async () => {
       mocks.publicLinkAPI.start.mockResolvedValue({
+        schema_version: 'gui.remote_link.v1',
+        status: 'online',
         running: true,
         tunnelUrl: 'https://phone-test.trycloudflare.com',
         oneTimeUrl: 'https://phone-test.trycloudflare.com/link?code=abc123',
+        oneTimeCode: 'abc123',
+        url: 'https://phone-test.trycloudflare.com',
+        one_time_code: 'abc123',
+        expiresAt: '2026-07-03T12:00:00.000Z',
+        codeExpiresAt: '2026-07-03T00:02:00.000Z',
+        expires_at: '2026-07-03T12:00:00.000Z',
+        code_expires_at: '2026-07-03T00:02:00.000Z',
         qrDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
+        qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
         frontendUrl: 'http://127.0.0.1:5173',
         logDir: '.tmp/mobile-tunnel-logs/test',
         processes: [{ name: 'cloudflared', pid: 4321 }],
@@ -536,6 +546,8 @@ describe('TopNavBar', () => {
 
       expect(mocks.publicLinkAPI.start).toHaveBeenCalledWith({ acceptRisk: true });
       expect(await screen.findByText('https://phone-test.trycloudflare.com/link?code=abc123')).toBeInTheDocument();
+      expect(screen.getAllByText('abc123').length).toBeGreaterThan(0);
+      expect(screen.getByText(/2026-07-03T12:00:00.000Z/)).toBeInTheDocument();
       expect(screen.getByAltText(/QR code|二维码/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /停止公开链接|stop public link/i })).toBeInTheDocument();
     });

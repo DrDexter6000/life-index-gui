@@ -17,6 +17,9 @@
     "test:watch": "vitest",
     "verify-stack": "node scripts/verify-stack.mjs",
     "stop-all": "node scripts/stop-all.mjs",
+    "remote-link:start": "node scripts/remote-link.mjs start",
+    "remote-link:status": "node scripts/remote-link.mjs status",
+    "remote-link:stop": "node scripts/remote-link.mjs stop",
     "smoke:e2e": "node scripts/smoke-e2e.mjs"
   },
   "dependencies": {

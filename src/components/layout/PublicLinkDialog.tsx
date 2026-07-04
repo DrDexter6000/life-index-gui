@@ -60,6 +60,9 @@ export function PublicLinkDialog({ isOpen, onClose }: PublicLinkDialogProps) {
 
   if (!isOpen) return null;
 
+  const oneTimeCode = status.oneTimeCode ?? status.one_time_code ?? null;
+  const expiresAt = status.expiresAt ?? status.expires_at ?? null;
+
   async function handleStart() {
     if (!acknowledged) return;
     stopEventsStream();
@@ -180,6 +183,22 @@ export function PublicLinkDialog({ isOpen, onClose }: PublicLinkDialogProps) {
                 alt={t('publicLinkQrAlt')}
                 className="mx-auto mt-3 h-48 w-48 rounded border border-[var(--color-green)]/20"
               />
+            )}
+            {(oneTimeCode || expiresAt) && (
+              <dl className="mt-3 grid gap-2 rounded-[8px] border border-white/[0.08] bg-black/15 p-3 text-xs">
+                {oneTimeCode && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <dt className="text-[var(--color-secondary)]">{t('publicLinkOneTimeCode')}</dt>
+                    <dd className="font-mono text-[var(--color-primary)]">{oneTimeCode}</dd>
+                  </div>
+                )}
+                {expiresAt && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <dt className="text-[var(--color-secondary)]">{t('publicLinkExpiresAt')}</dt>
+                    <dd className="font-mono text-[var(--color-primary)]">{expiresAt}</dd>
+                  </div>
+                )}
+              </dl>
             )}
           </div>
         )}

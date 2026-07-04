@@ -25,6 +25,27 @@ LIFE_INDEX_HOST_AGENT_URL=http://127.0.0.1:8791
 
 If the URL is missing or unreachable, GUI AI+ must show an honest unavailable/offline state. The GUI must not fabricate answers or silently fall back to local intelligence.
 
+## Remote GUI Link For Host Agents
+
+Remote browser access is a GUI capability, not a CLI data feature and not a
+host-agent intelligence feature. If a user asks the host agent for a temporary
+phone link, run the GUI command:
+
+```bash
+npm run remote-link:start
+```
+
+The command prints a `gui.remote_link.v1` JSON envelope. Relay `url` and
+`one_time_code` to the user, then stop the link when the session is over:
+
+```bash
+npm run remote-link:stop
+```
+
+The command uses the same `/api/public-link/*` backend logic as the desktop GUI
+button. The public tunnel exposes only the token-gated GUI data plane; control
+operations stay local and are blocked inside the tunnel backend.
+
 ## Interfaces
 
 ### GET /health

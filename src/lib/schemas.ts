@@ -449,10 +449,22 @@ export const PublicLinkErrorSchema = z.object({
 }).passthrough();
 
 export const PublicLinkStatusSchema = z.object({
+  schema_version: z.literal('gui.remote_link.v1').optional(),
+  status: z.enum(['offline', 'starting', 'online', 'error']).optional(),
+  url: z.string().nullable().optional(),
+  one_time_code: z.string().nullable().optional(),
+  expires_at: z.string().nullable().optional(),
+  code_expires_at: z.string().nullable().optional(),
+  remaining_ttl_seconds: z.number().nullable().optional(),
+  qr: z.string().nullable().optional(),
   running: z.boolean(),
   tunnelUrl: z.string().nullable(),
   oneTimeUrl: z.string().nullable().optional(),
+  oneTimeCode: z.string().nullable().optional(),
   qrDataUrl: z.string().nullable().optional(),
+  expiresAt: z.string().nullable().optional(),
+  codeExpiresAt: z.string().nullable().optional(),
+  remainingTtlSeconds: z.number().nullable().optional(),
   frontendUrl: z.string().nullable(),
   logDir: z.string().nullable(),
   processes: z.array(PublicLinkProcessSchema).default([]),

@@ -69,6 +69,34 @@ npm run stop-all
 
 If `stop-all` reports an unknown port owner, inspect that process manually before retrying.
 
+## 4. Start A Temporary Remote GUI Link
+
+When the user asks for a phone or remote browser link, use the GUI-owned
+remote-link primitive. It verifies the local GUI stack, starts the same
+token-gated public-link backend logic that the desktop button uses, and prints
+one JSON envelope:
+
+```bash
+npm run remote-link:start
+```
+
+Return only the `url` and `one_time_code` to the user. The envelope is
+versioned as `gui.remote_link.v1` and includes `expires_at` for the tunnel TTL
+and `code_expires_at` for the short-lived single-use code.
+
+To inspect or stop the link:
+
+```bash
+npm run remote-link:status
+npm run remote-link:stop
+```
+
+The tunnel exposes the token-gated GUI data plane only. Control operations such
+as `remote-link:start`, `verify-stack`, and `/api/public-link/*` stay local and
+must not be routed through the public URL. If `cloudflared` or the local stack is
+missing, the command returns explicit JSON with `status: "error"` and does not
+leave a half-open tunnel.
+
 ## Compatibility Rule
 
 The GUI is compatible when:
