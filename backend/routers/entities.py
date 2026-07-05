@@ -231,7 +231,15 @@ def _validate_mutation_request(
 
 def _mutation_preview_args(body: EntityMutationRequest) -> list[str]:
     if body.operation == "delete":
-        return ["entity", "--delete", "--preview", "--id", str(body.entity_id)]
+        return [
+            "entity",
+            "maintain",
+            "--delete",
+            "--id",
+            str(body.entity_id),
+            "--preview",
+            "--json",
+        ]
     return [
         "entity",
         "--review",
@@ -246,11 +254,21 @@ def _mutation_preview_args(body: EntityMutationRequest) -> list[str]:
 
 def _mutation_confirm_args(body: EntityMutationRequest) -> list[str]:
     if body.operation == "delete":
-        return ["entity", "--delete", "--id", str(body.entity_id)]
+        return [
+            "entity",
+            "maintain",
+            "--delete",
+            "--id",
+            str(body.entity_id),
+            "--apply",
+            "--backup",
+            "--json",
+        ]
     return [
         "entity",
-        "--merge",
-        str(body.source_id),
+        "--review",
+        "--action",
+        "merge_as_alias",
         "--id",
         str(body.source_id),
         "--target-id",

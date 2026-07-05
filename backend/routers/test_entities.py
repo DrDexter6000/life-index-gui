@@ -150,7 +150,15 @@ def test_preview_delete_uses_cli_preview_without_serialized_mutation():
     mock_adapter.run_json = AsyncMock(
         return_value={
             "success": True,
-            "data": {"deleted_id": "person-a", "cleaned_refs": []},
+            "data": {
+                "workflow": "maintain.delete",
+                "preview": True,
+                "applied": False,
+                "backup_path": None,
+                "deleted_id": "person-a",
+                "deleted_name": "Zhang San",
+                "cleaned_refs": [{"entity_id": "person-b", "relation": "colleague_of"}],
+            },
             "schema_version": "v1.1.1",
             "provenance": {"generator": "entity"},
         }
@@ -169,15 +177,44 @@ def test_preview_delete_uses_cli_preview_without_serialized_mutation():
     assert payload["data"]["operation"] == "delete"
     assert payload["data"]["requiresConfirmation"] is True
     assert payload["data"]["preview"]["deleted_id"] == "person-a"
+    assert payload["data"]["preview"]["cleaned_refs"][0]["entity_id"] == "person-b"
     assert payload["data"]["schemaVersion"] == "v1.1.1"
     assert mock_adapter.run_json.call_args[0][0] == [
         "entity",
+        "maintain",
         "--delete",
-        "--preview",
         "--id",
         "person-a",
+        "--preview",
+        "--json",
     ]
     mock_adapter.run_serialized.assert_not_called()
+
+
+def test_preview_delete_passthroughs_maintain_not_found_error():
+    """Delete preview preserves structured maintain errors from the CLI."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(
+        return_value={
+            "success": False,
+            "error": {
+                "code": "ENTITY_MAINTAIN_DELETE_NOT_FOUND",
+                "message": "Entity not found: person-missing",
+            },
+        }
+    )
+
+    with patch("backend.routers.entities.CLIAdapter", return_value=mock_adapter):
+        response = client.post(
+            "/api/entities/mutations/preview",
+            json={"operation": "delete", "entityId": "person-missing"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "ENTITY_MAINTAIN_DELETE_NOT_FOUND"
+    assert payload["error"]["message"] == "Entity not found: person-missing"
 
 
 def test_preview_merge_uses_review_preview_surface():
@@ -245,7 +282,17 @@ def test_confirm_delete_runs_serialized_mutation_then_entity_check():
         return_value=json.dumps(
             {
                 "success": True,
-                "data": {"deleted_id": "person-a", "cleaned_refs": []},
+                "data": {
+                    "workflow": "maintain.delete",
+                    "preview": False,
+                    "applied": True,
+                    "backup_path": "entity_graph.yaml.backup_20260705_120000",
+                    "deleted_id": "person-a",
+                    "deleted_name": "Zhang San",
+                    "cleaned_refs": [
+                        {"entity_id": "person-b", "relation": "colleague_of"}
+                    ],
+                },
                 "schema_version": "v1.1.1",
             }
         )
@@ -272,27 +319,71 @@ def test_confirm_delete_runs_serialized_mutation_then_entity_check():
     payload = response.json()
     assert payload["ok"] is True
     assert payload["data"]["mutation"]["deleted_id"] == "person-a"
+    assert payload["data"]["mutation"]["backup_path"].endswith(
+        "entity_graph.yaml.backup_20260705_120000"
+    )
+    assert payload["data"]["mutation"]["cleaned_refs"][0]["entity_id"] == "person-b"
     assert payload["data"]["postCheck"]["issues"] == []
     assert mock_adapter.run_serialized.call_args[0][0] == [
         "entity",
+        "maintain",
         "--delete",
         "--id",
         "person-a",
+        "--apply",
+        "--backup",
+        "--json",
     ]
     assert mock_adapter.run_json.call_args[0][0] == ["entity", "--check"]
 
 
+def test_confirm_delete_passthroughs_maintain_backup_required_error():
+    """Delete confirmation preserves structured maintain errors before post-check."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_serialized = AsyncMock(
+        return_value=json.dumps(
+            {
+                "success": False,
+                "error": {
+                    "code": "ENTITY_MAINTAIN_DELETE_BACKUP_REQUIRED",
+                    "message": "entity maintain --delete --apply requires --backup",
+                },
+            }
+        )
+    )
+    mock_adapter.run_json = AsyncMock()
+
+    with patch("backend.routers.entities.CLIAdapter", return_value=mock_adapter):
+        response = client.post(
+            "/api/entities/mutations/confirm",
+            json={
+                "operation": "delete",
+                "entityId": "person-a",
+                "previewAccepted": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "ENTITY_MAINTAIN_DELETE_BACKUP_REQUIRED"
+    assert "requires --backup" in payload["error"]["message"]
+    mock_adapter.run_json.assert_not_called()
+
+
 def test_confirm_merge_uses_cli_merge_and_post_check():
-    """Merge confirmation uses the CLI's historical --merge argument shape."""
+    """Merge confirmation uses the CLI review action surface."""
     mock_adapter = MagicMock()
     mock_adapter.run_serialized = AsyncMock(
         return_value=json.dumps(
             {
                 "success": True,
-                "action": "merge_as_alias",
-                "source_id": "person-b",
-                "target_id": "person-a",
-                "transferred_names": ["张叁"],
+                "data": {
+                    "action": "merge_as_alias",
+                    "source_id": "person-b",
+                    "target_id": "person-a",
+                    "transferred_names": ["张叁"],
+                },
             }
         )
     )
@@ -317,8 +408,9 @@ def test_confirm_merge_uses_cli_merge_and_post_check():
     assert payload["data"]["mutation"]["action"] == "merge_as_alias"
     assert mock_adapter.run_serialized.call_args[0][0] == [
         "entity",
-        "--merge",
-        "person-b",
+        "--review",
+        "--action",
+        "merge_as_alias",
         "--id",
         "person-b",
         "--target-id",
@@ -414,8 +506,82 @@ entities:
     confirm_payload = confirm_response.json()
     assert confirm_payload["ok"] is True
     assert confirm_payload["data"]["mutation"]["deleted_id"] == "person-a"
+    assert confirm_payload["data"]["mutation"]["backup_path"]
+    assert confirm_payload["data"]["mutation"]["cleaned_refs"][0]["entity_id"] == "person-b"
     assert confirm_payload["data"]["postCheck"]["issues"] == []
 
     list_response = client.get("/api/entities")
     listed_ids = {item["id"] for item in list_response.json()["data"]}
     assert listed_ids == {"person-b"}
+
+
+@pytest.mark.skipif(
+    shutil.which(config.CLI_COMMAND) is None,
+    reason="life-index CLI is not installed on PATH",
+)
+def test_real_cli_entity_merge_preview_and_confirm_sandbox(tmp_path, monkeypatch):
+    """Entity merge mutation uses the real review action CLI surface in a sandbox."""
+    monkeypatch.setenv("LIFE_INDEX_DATA_DIR", str(tmp_path))
+    (tmp_path / "entity_graph.yaml").write_text(
+        """
+entities:
+  - id: person-a
+    type: person
+    primary_name: Zhang San
+    aliases: []
+    attributes: {}
+    relationships: []
+  - id: person-b
+    type: person
+    primary_name: Zhang S.
+    aliases:
+      - Old Zhang
+    attributes: {}
+    relationships:
+      - target: place-a
+        relation: visited
+  - id: place-a
+    type: place
+    primary_name: Western Sichuan
+    aliases: []
+    attributes: {}
+    relationships: []
+""".strip(),
+        encoding="utf-8",
+    )
+
+    preview_response = client.post(
+        "/api/entities/mutations/preview",
+        json={
+            "operation": "merge_as_alias",
+            "sourceId": "person-b",
+            "targetId": "person-a",
+        },
+    )
+
+    assert preview_response.status_code == 200
+    preview_payload = preview_response.json()
+    assert preview_payload["ok"] is True
+    assert preview_payload["data"]["preview"]["action"] == "merge_as_alias"
+
+    confirm_response = client.post(
+        "/api/entities/mutations/confirm",
+        json={
+            "operation": "merge_as_alias",
+            "sourceId": "person-b",
+            "targetId": "person-a",
+            "previewAccepted": True,
+        },
+    )
+
+    assert confirm_response.status_code == 200
+    confirm_payload = confirm_response.json()
+    assert confirm_payload["ok"] is True
+    assert confirm_payload["data"]["mutation"]["action"] == "merge_as_alias"
+    assert confirm_payload["data"]["mutation"]["source_id"] == "person-b"
+    assert confirm_payload["data"]["mutation"]["target_id"] == "person-a"
+    assert confirm_payload["data"]["postCheck"]["issues"] == []
+
+    list_response = client.get("/api/entities")
+    listed_ids = {item["id"] for item in list_response.json()["data"]}
+    assert listed_ids == {"person-a", "place-a"}
