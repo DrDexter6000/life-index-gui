@@ -11,7 +11,7 @@ from backend import config
 
 logger = logging.getLogger(__name__)
 
-MIN_SUPPORTED_CLI_VERSION = "1.2.1"
+MIN_SUPPORTED_CLI_VERSION = "1.3.7"
 
 
 class CLIError(Exception):

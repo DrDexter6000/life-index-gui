@@ -444,8 +444,23 @@ def test_add_alias_mutation_is_rejected_until_cli_preview_contract_exists():
     shutil.which(config.CLI_COMMAND) is None,
     reason="life-index CLI is not installed on PATH",
 )
-def test_real_cli_entity_stats_read_only():
-    """GET /api/entities/stats works against the real read-only CLI surface."""
+def test_real_cli_entity_stats_read_only(tmp_path, monkeypatch):
+    """GET /api/entities/stats works against a valid real CLI sandbox graph."""
+    monkeypatch.setenv("LIFE_INDEX_DATA_DIR", str(tmp_path))
+    (tmp_path / "entity_graph.yaml").write_text(
+        """
+entities:
+  - id: person-a
+    type: actor
+    primary_name: Zhang San
+    aliases: []
+    attributes:
+      kind: human
+    relationships: []
+""".strip(),
+        encoding="utf-8",
+    )
+
     response = client.get("/api/entities/stats")
 
     assert response.status_code == 200
@@ -465,16 +480,18 @@ def test_real_cli_entity_delete_preview_and_confirm_sandbox(tmp_path, monkeypatc
         """
 entities:
   - id: person-a
-    type: person
+    type: actor
     primary_name: Zhang San
     aliases: []
-    attributes: {}
+    attributes:
+      kind: human
     relationships: []
   - id: person-b
-    type: person
+    type: actor
     primary_name: Li Si
     aliases: []
-    attributes: {}
+    attributes:
+      kind: human
     relationships:
       - target: person-a
         relation: colleague_of
@@ -526,17 +543,19 @@ def test_real_cli_entity_merge_preview_and_confirm_sandbox(tmp_path, monkeypatch
         """
 entities:
   - id: person-a
-    type: person
+    type: actor
     primary_name: Zhang San
     aliases: []
-    attributes: {}
+    attributes:
+      kind: human
     relationships: []
   - id: person-b
-    type: person
+    type: actor
     primary_name: Zhang S.
     aliases:
       - Old Zhang
-    attributes: {}
+    attributes:
+      kind: human
     relationships:
       - target: place-a
         relation: visited

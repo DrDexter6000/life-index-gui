@@ -5,10 +5,6 @@
 </p>
 
 <p align="center">
-  If you are a host agent (Hermes / Claude Code / similar), read <a href="docs/AGENT_UPDATE_PLAYBOOK.md">docs/AGENT_UPDATE_PLAYBOOK.md</a> first.
-</p>
-
-<p align="center">
   <strong>Life Index CLI serves your agent. Life Index GUI serves you.</strong><br />
   The GUI is the human experience layer built on the Life Index CLI foundation: writing, search, review, AI+ evidence panels, and temporary mobile access.
 </p>
@@ -19,7 +15,7 @@
 
 <p align="center">
   <a href="https://github.com/DrDexter6000/life-index-gui/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/DrDexter6000/life-index-gui/actions/workflows/ci.yml/badge.svg" /></a>
-  <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue" />
+  <img alt="License: AGPL-3.0-only" src="https://img.shields.io/badge/license-AGPL--3.0-blue" />
   <img alt="React" src="https://img.shields.io/badge/frontend-React-61dafb" />
   <img alt="FastAPI" src="https://img.shields.io/badge/backend-FastAPI-009688" />
   <img alt="Built on Life Index CLI" src="https://img.shields.io/badge/built_on-Life_Index_CLI-gold" />
@@ -35,6 +31,7 @@
   <a href="#three-promises">Three Promises</a> ·
   <a href="#real-interface">Real Interface</a> ·
   <a href="#quick-start">Quick Start</a> ·
+  <a href="#upgrade">Upgrade</a> ·
   <a href="#architecture--cli-relationship">Architecture</a>
 </p>
 
@@ -150,6 +147,10 @@ Production build:
 npm run build
 ```
 
+## Upgrade
+
+For the complete upgrade and operations steps, see [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md).
+
 ## Temporary Phone Access
 
 Public links are explicit risk operations. They currently support only `cloudflared` Quick Tunnel; SSH/ngrok/frp paths are not supported. Stop the link when you are done. If generation fails, the GUI fails closed instead of exposing a half-configured link.
@@ -220,4 +221,6 @@ Open `https://<cloudflared-host>.trycloudflare.com/link?code=<ONE_TIME_CODE>`. T
 
 ## License
 
-Apache-2.0
+[GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
+
+Plain-language summary: local use, personal journaling, and running Life Index GUI on your own machine are unaffected. If you offer a hosted or networked derivative service based on a modified version, AGPL requires you to publish the corresponding service source and modifications.

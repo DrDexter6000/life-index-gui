@@ -20,13 +20,20 @@ Read the health payload before moving on. If it exposes `upgrade_freshness`, tre
 
 ## 2. Update Life Index GUI
 
+The GUI worktree must be clean before upgrading. If `git status --porcelain`
+prints any path, stop and restore or commit that work before continuing; do not
+try to upgrade over a dirty tree.
+
 ```bash
 cd /path/to/life-index-gui
+git status --porcelain
 git pull --ff-only
 npm ci --include=dev
 npm run build
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
+
+Do not use bare `npm install` during upgrades. node_modules can be incomplete while npm reports "up to date"; `npm ci --include=dev` is the only supported dependency install path for upgrade recovery.
 
 In another shell:
 

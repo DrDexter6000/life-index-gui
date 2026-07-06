@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import net from 'node:net';
@@ -112,6 +113,37 @@ export function createLaunchCommands({
       ],
     },
   };
+}
+
+export function preflightVerifyStackDevDependencies({
+  repoRoot = moduleRepoRoot,
+  required = ['vite'],
+} = {}) {
+  const root = resolve(repoRoot);
+  const packageJsonPath = join(root, 'package.json');
+  const requireFromRepo = createRequire(packageJsonPath);
+  const missing = [];
+
+  for (const dependencyName of required) {
+    try {
+      requireFromRepo.resolve(dependencyName);
+    } catch {
+      missing.push(dependencyName);
+    }
+  }
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      missing,
+      error: {
+        code: 'VERIFY_STACK_DEVDEPS_MISSING',
+        message: `Missing required dev dependency: ${missing.join(', ')}. Run npm ci --include=dev before npm run verify-stack.`,
+      },
+    };
+  }
+
+  return { ok: true, missing: [] };
 }
 
 function execFileAsync(command, args, options = {}) {
@@ -351,6 +383,13 @@ export async function runVerifyStack({
   ];
 
   try {
+    const preflight = preflightVerifyStackDevDependencies({ repoRoot: root });
+    result.steps.push({ name: 'dev-dependencies', ...preflight });
+    if (!preflight.ok) {
+      result.error = preflight.error;
+      return result;
+    }
+
     for (const item of ports) {
       const check = await ensurePortAvailable({ ...item, repoRoot: root });
       result.ports.push(check);

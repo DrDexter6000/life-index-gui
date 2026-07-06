@@ -5,10 +5,6 @@
 </p>
 
 <p align="center">
-  若你是宿主 agent（Hermes / Claude Code 等），请先读 <a href="docs/AGENT_UPDATE_PLAYBOOK.md">docs/AGENT_UPDATE_PLAYBOOK.md</a>。
-</p>
-
-<p align="center">
   <strong>Life Index CLI 服务 Agent; Life Index GUI 服务人类用户。</strong><br />
   GUI 是建在 Life Index CLI 地基上的体验层：写入、搜索、回看、AI+ 证据面板和临时移动访问，都以人的使用感为中心。
 </p>
@@ -19,7 +15,7 @@
 
 <p align="center">
   <a href="https://github.com/DrDexter6000/life-index-gui/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/DrDexter6000/life-index-gui/actions/workflows/ci.yml/badge.svg" /></a>
-  <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue" />
+  <img alt="License: AGPL-3.0-only" src="https://img.shields.io/badge/license-AGPL--3.0-blue" />
   <img alt="React" src="https://img.shields.io/badge/frontend-React-61dafb" />
   <img alt="FastAPI" src="https://img.shields.io/badge/backend-FastAPI-009688" />
   <img alt="Built on Life Index CLI" src="https://img.shields.io/badge/built_on-Life_Index_CLI-gold" />
@@ -35,6 +31,7 @@
   <a href="#三个承诺">三个承诺</a> ·
   <a href="#真实界面">真实界面</a> ·
   <a href="#快速开始">快速开始</a> ·
+  <a href="#升级">升级</a> ·
   <a href="#架构--与-cli-关系">架构</a>
 </p>
 
@@ -151,6 +148,10 @@ http://127.0.0.1:5173
 npm run build
 ```
 
+## 升级
+
+升级与运维完整步骤见 [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md)。
+
 ## 手机临时访问
 
 公网链接是显式风险操作：目前仅支持 `cloudflared` Quick Tunnel，不支持 SSH/ngrok/frp 路径。用完应立即停止。生成失败时 GUI 会 fail-closed，不暴露半配置入口。
@@ -216,4 +217,6 @@ cloudflared tunnel --url http://127.0.0.1:5173
 
 ## License
 
-Apache-2.0
+[GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
+
+白话说：本地使用、个人记录、在自己电脑上运行 Life Index GUI 不受任何影响。若你把修改版作为托管或网络衍生服务提供给他人，就需要按 AGPL 公开相应服务代码和修改。

@@ -18,11 +18,7 @@ def get_gui_version() -> str:
 def enrich_handshake_version(payload: dict[str, Any]) -> dict[str, Any]:
     """Add GUI and canonical CLI compatibility aliases to a handshake payload."""
     data = dict(payload)
-    minimum = (
-        data.get("cli_minimum_version")
-        or data.get("minimum_supported_version")
-        or MIN_SUPPORTED_CLI_VERSION
-    )
+    minimum = MIN_SUPPORTED_CLI_VERSION
     data["gui_version"] = get_gui_version()
     data["cli_minimum_version"] = minimum
     data["minimum_supported_version"] = minimum

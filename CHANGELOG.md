@@ -1,3 +1,8 @@
+## [Unreleased]
+
+### Changed
+- License changed to AGPL-3.0-only for the next released version. Local use is unaffected; hosted derivative services must publish corresponding source.
+
 ## [0.3.0] - 2026-07-03
 
 ### What users get

@@ -123,8 +123,8 @@ async def test_handshake_runs_version_and_health(adapter):
         calls.append(args)
         if args == ["version"]:
             return {
-                "package_version": "1.2.1",
-                "bootstrap_manifest": {"repo_version": "1.2.1"},
+                "package_version": "1.3.7",
+                "bootstrap_manifest": {"repo_version": "1.3.7"},
             }
         if args == ["health"]:
             return {"status": "healthy", "journal_count": 3}
@@ -137,9 +137,31 @@ async def test_handshake_runs_version_and_health(adapter):
     assert result["cli_available"] is True
     assert result["compatible"] is True
     assert result["status"] == "ok"
-    assert result["package_version"] == "1.2.1"
-    assert result["repo_version"] == "1.2.1"
+    assert result["package_version"] == "1.3.7"
+    assert result["repo_version"] == "1.3.7"
     assert result["health"]["journal_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_handshake_marks_pre_1_3_7_cli_incompatible(adapter):
+    """CLIAdapter.handshake rejects CLI releases below the GUI minimum."""
+
+    async def fake_run_json(args, timeout=None):
+        if args == ["version"]:
+            return {
+                "package_version": "1.2.1",
+                "bootstrap_manifest": {"repo_version": "1.2.1"},
+            }
+        if args == ["health"]:
+            return {"status": "healthy", "journal_count": 3}
+        raise AssertionError(f"unexpected command: {args}")
+
+    with patch.object(adapter, "run_json", side_effect=fake_run_json):
+        result = await adapter.handshake()
+
+    assert result["cli_available"] is True
+    assert result["compatible"] is False
+    assert result["minimum_supported_version"] == "1.3.7"
 
 
 @pytest.mark.asyncio
@@ -148,7 +170,7 @@ async def test_handshake_uses_nested_health_status(adapter):
 
     async def fake_run_json(args, timeout=None):
         if args == ["version"]:
-            return {"package_version": "1.2.1"}
+            return {"package_version": "1.3.7"}
         if args == ["health"]:
             return {"success": True, "data": {"status": "degraded"}}
         raise AssertionError(f"unexpected command: {args}")

@@ -1,5 +1,19 @@
 import assert from 'node:assert/strict';
-import { classifyPortOwners, createLaunchCommands, parseSsPids, parseWindowsTcpPids } from './lib/agent-ops-stack.mjs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  classifyPortOwners,
+  createLaunchCommands,
+  parseSsPids,
+  parseWindowsTcpPids,
+  preflightVerifyStackDevDependencies,
+} from './lib/agent-ops-stack.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const verifyStackScript = join(resolve(__dirname, '..'), 'scripts', 'verify-stack.mjs');
 
 const repoRoot = process.platform === 'win32'
   ? 'D:\\Work\\life-index-gui-public'
@@ -75,5 +89,43 @@ assert.equal(
 );
 assert.ok(launch.frontend.args.includes('--config'));
 assert.ok(launch.frontend.args.some((arg) => arg.endsWith('vite.config.ts')));
+
+const tempRoot = mkdtempSync(join(tmpdir(), 'life-index-verify-stack-missing-vite-'));
+try {
+  writeFileSync(
+    join(tempRoot, 'package.json'),
+    `${JSON.stringify({ name: 'life-index-gui-fixture', type: 'module' }, null, 2)}\n`,
+  );
+  mkdirSync(join(tempRoot, 'node_modules'), { recursive: true });
+
+  assert.deepEqual(
+    preflightVerifyStackDevDependencies({ repoRoot: tempRoot }),
+    {
+      ok: false,
+      missing: ['vite'],
+      error: {
+        code: 'VERIFY_STACK_DEVDEPS_MISSING',
+        message: 'Missing required dev dependency: vite. Run npm ci --include=dev before npm run verify-stack.',
+      },
+    },
+    'verify-stack must fail fast with npm ci --include=dev guidance when vite is missing',
+  );
+
+  assert.throws(
+    () => execFileSync(process.execPath, [verifyStackScript, '--repo-root', tempRoot], { encoding: 'utf8' }),
+    (error) => {
+      const output = String(error.stdout ?? '');
+      const result = JSON.parse(output);
+      assert.equal(error.status, 1);
+      assert.equal(result.error.code, 'VERIFY_STACK_DEVDEPS_MISSING');
+      assert.match(result.error.message, /Run npm ci --include=dev/);
+      assert.equal(result.processes.length, 0);
+      return true;
+    },
+    'verify-stack command must exit non-zero before spawning processes when vite is missing',
+  );
+} finally {
+  rmSync(tempRoot, { recursive: true, force: true });
+}
 
 console.log('agent ops stack helpers OK');
