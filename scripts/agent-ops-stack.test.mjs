@@ -9,11 +9,20 @@ import {
   createLaunchCommands,
   parseSsPids,
   parseWindowsTcpPids,
+  preflightWorktreeStatus,
   preflightVerifyStackDevDependencies,
 } from './lib/agent-ops-stack.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const verifyStackScript = join(resolve(__dirname, '..'), 'scripts', 'verify-stack.mjs');
+
+function git(cwd, args) {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
 
 const repoRoot = process.platform === 'win32'
   ? 'D:\\Work\\life-index-gui-public'
@@ -105,7 +114,7 @@ try {
       missing: ['vite'],
       error: {
         code: 'VERIFY_STACK_DEVDEPS_MISSING',
-        message: 'Missing required dev dependency: vite. Run npm ci --include=dev before npm run verify-stack.',
+        message: 'Missing required dev dependency: vite. Run npm ci --include=dev before npm run verify-stack. If critical dev dependencies are still missing after npm ci, fallback: pnpm install && pnpm run build (install pnpm first with npm i -g pnpm).',
       },
     },
     'verify-stack must fail fast with npm ci --include=dev guidance when vite is missing',
@@ -119,6 +128,8 @@ try {
       assert.equal(error.status, 1);
       assert.equal(result.error.code, 'VERIFY_STACK_DEVDEPS_MISSING');
       assert.match(result.error.message, /Run npm ci --include=dev/);
+      assert.match(result.error.message, /pnpm install && pnpm run build/);
+      assert.match(result.error.message, /npm i -g pnpm/);
       assert.equal(result.processes.length, 0);
       return true;
     },
@@ -126,6 +137,37 @@ try {
   );
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
+}
+
+const cleanGitRoot = mkdtempSync(join(tmpdir(), 'life-index-verify-stack-clean-git-'));
+try {
+  git(cleanGitRoot, ['init']);
+  git(cleanGitRoot, ['config', 'user.email', 'test@example.invalid']);
+  git(cleanGitRoot, ['config', 'user.name', 'Life Index Test']);
+  writeFileSync(join(cleanGitRoot, 'package.json'), '{"name":"clean-fixture"}\n');
+  git(cleanGitRoot, ['add', 'package.json']);
+  git(cleanGitRoot, ['commit', '-m', 'fixture']);
+
+  assert.deepEqual(
+    await preflightWorktreeStatus({ repoRoot: cleanGitRoot }),
+    { ok: true, dirty: false, dirtyFiles: [] },
+    'verify-stack should not warn for a clean git worktree',
+  );
+
+  writeFileSync(join(cleanGitRoot, 'package.json'), '{"name":"dirty-fixture"}\n');
+  writeFileSync(join(cleanGitRoot, 'friction-note.md'), 'write friction notes outside cloned repositories\n');
+
+  const dirtyStatus = await preflightWorktreeStatus({ repoRoot: cleanGitRoot });
+  assert.equal(dirtyStatus.ok, true);
+  assert.equal(dirtyStatus.dirty, true);
+  assert.match(dirtyStatus.warning.message, /Working tree is dirty/);
+  assert.match(dirtyStatus.warning.message, /git status --porcelain/);
+  assert.match(dirtyStatus.warning.message, /git restore \./);
+  assert.match(dirtyStatus.warning.message, /git clean -fd/);
+  assert.ok(dirtyStatus.dirtyFiles.some((line) => line.includes('package.json')));
+  assert.ok(dirtyStatus.dirtyFiles.some((line) => line.includes('friction-note.md')));
+} finally {
+  rmSync(cleanGitRoot, { recursive: true, force: true });
 }
 
 console.log('agent ops stack helpers OK');

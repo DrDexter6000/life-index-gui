@@ -138,12 +138,47 @@ export function preflightVerifyStackDevDependencies({
       missing,
       error: {
         code: 'VERIFY_STACK_DEVDEPS_MISSING',
-        message: `Missing required dev dependency: ${missing.join(', ')}. Run npm ci --include=dev before npm run verify-stack.`,
+        message: `Missing required dev dependency: ${missing.join(', ')}. Run npm ci --include=dev before npm run verify-stack. If critical dev dependencies are still missing after npm ci, fallback: pnpm install && pnpm run build (install pnpm first with npm i -g pnpm).`,
       },
     };
   }
 
   return { ok: true, missing: [] };
+}
+
+export async function preflightWorktreeStatus({ repoRoot = moduleRepoRoot } = {}) {
+  const root = resolve(repoRoot);
+  const result = await execFileAsync('git', ['status', '--porcelain'], { cwd: root });
+  if (!result.ok) {
+    return {
+      ok: true,
+      dirty: false,
+      dirtyFiles: [],
+      skipped: true,
+      reason: 'git-status-unavailable',
+    };
+  }
+
+  const dirtyFiles = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+
+  if (dirtyFiles.length === 0) {
+    return { ok: true, dirty: false, dirtyFiles: [] };
+  }
+
+  const shownFiles = dirtyFiles.slice(0, 20).join('; ');
+  const suffix = dirtyFiles.length > 20 ? `; ... ${dirtyFiles.length - 20} more` : '';
+  return {
+    ok: true,
+    dirty: true,
+    dirtyFiles,
+    warning: {
+      code: 'VERIFY_STACK_WORKTREE_DIRTY',
+      message: `Working tree is dirty; git status --porcelain reported ${dirtyFiles.length} path(s): ${shownFiles}${suffix}. Keep operations clones at zero local changes. Restore tracked changes with git restore . and remove untracked files with git clean -fd before upgrading.`,
+    },
+  };
 }
 
 function execFileAsync(command, args, options = {}) {
@@ -372,6 +407,7 @@ export async function runVerifyStack({
     repoRoot: root,
     ports: [],
     steps: [],
+    warnings: [],
     processes: [],
     cleanup: [],
     noOrphans: false,
@@ -383,6 +419,12 @@ export async function runVerifyStack({
   ];
 
   try {
+    const worktreeStatus = await preflightWorktreeStatus({ repoRoot: root });
+    result.steps.push({ name: 'worktree-status', ...worktreeStatus });
+    if (worktreeStatus.warning) {
+      result.warnings.push(worktreeStatus.warning);
+    }
+
     const preflight = preflightVerifyStackDevDependencies({ repoRoot: root });
     result.steps.push({ name: 'dev-dependencies', ...preflight });
     if (!preflight.ok) {

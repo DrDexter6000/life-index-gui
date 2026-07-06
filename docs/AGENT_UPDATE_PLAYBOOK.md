@@ -24,6 +24,8 @@ The GUI worktree must be clean before upgrading. If `git status --porcelain`
 prints any path, stop and restore or commit that work before continuing; do not
 try to upgrade over a dirty tree.
 
+Operations discipline: Never commit or push from an operations clone. Keep the clone at zero local changes. Write friction notes and operational notes to the Life Index data directory, not inside the cloned repository.
+
 ```bash
 cd /path/to/life-index-gui
 git status --porcelain
@@ -34,6 +36,18 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
 Do not use bare `npm install` during upgrades. node_modules can be incomplete while npm reports "up to date"; `npm ci --include=dev` is the only supported dependency install path for upgrade recovery.
+
+If `npm ci --include=dev` finishes but critical devDependencies are still missing and the verify-stack preflight reports them, use this fallback: `pnpm install && pnpm run build`.
+
+```bash
+pnpm install && pnpm run build
+```
+
+If `pnpm` is not installed yet:
+
+```bash
+npm i -g pnpm
+```
 
 In another shell:
 
