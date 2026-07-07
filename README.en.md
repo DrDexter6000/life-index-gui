@@ -107,7 +107,7 @@ AI+ Star Trail sends your question to your host agent. The host agent uses the L
 Prerequisites:
 
 - Node.js 22+
-- Python 3.12-3.13 (`pydantic-core` / `Pillow` wheels are not yet available for Python 3.14 in this pinned dependency set)
+- Python 3.11-3.13 (`pydantic-core` / `Pillow` wheels are not yet available for Python 3.14 in this pinned dependency set)
 - Life Index CLI installed and runnable locally
 - Optional: a host agent for AI+ grounded answers / smart metadata
 - Optional: `cloudflared` for temporary phone access (the only supported public tunnel)

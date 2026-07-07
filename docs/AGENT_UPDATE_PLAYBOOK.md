@@ -30,12 +30,21 @@ Operations discipline: Never commit or push from an operations clone. Keep the c
 cd /path/to/life-index-gui
 git status --porcelain
 git pull --ff-only
+python --version
+python3.13 -m venv .venv  # if the active Python is outside 3.11-3.13
+source .venv/bin/activate # Windows PowerShell: .venv\Scripts\Activate.ps1
+echo $NODE_ENV
+unset NODE_ENV             # if it printed production
 npm ci --include=dev
 npm run build
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
+The GUI backend supports Python 3.11-3.13 until upstream `pydantic-core` / `Pillow` wheels cover Python 3.14. If the active interpreter is Python 3.14 or newer, create a Python 3.13 virtual environment before installing backend requirements.
+
 Do not use bare `npm install` during upgrades. node_modules can be incomplete while npm reports "up to date"; `npm ci --include=dev` is the only supported dependency install path for upgrade recovery.
+
+Before dependency recovery, print `NODE_ENV`. If it is `production`, clear it first; otherwise npm can omit devDependencies even when the lockfile contains them. On POSIX shells use `echo $NODE_ENV` and `unset NODE_ENV`; on Windows PowerShell use `$env:NODE_ENV` and `Remove-Item Env:NODE_ENV`.
 
 If `npm ci --include=dev` finishes but critical devDependencies are still missing and the verify-stack preflight reports them, use this fallback: `pnpm install && pnpm run build`.
 

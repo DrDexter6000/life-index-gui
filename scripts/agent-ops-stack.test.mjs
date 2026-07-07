@@ -9,6 +9,7 @@ import {
   createLaunchCommands,
   parseSsPids,
   parseWindowsTcpPids,
+  preflightBackendPythonVersion,
   preflightWorktreeStatus,
   preflightVerifyStackDevDependencies,
 } from './lib/agent-ops-stack.mjs';
@@ -114,7 +115,7 @@ try {
       missing: ['vite'],
       error: {
         code: 'VERIFY_STACK_DEVDEPS_MISSING',
-        message: 'Missing required dev dependency: vite. Run npm ci --include=dev before npm run verify-stack. If critical dev dependencies are still missing after npm ci, fallback: pnpm install && pnpm run build (install pnpm first with npm i -g pnpm).',
+        message: 'Missing required dev dependency: vite. Check NODE_ENV first; if it is production, clear it before running npm ci --include=dev. Run npm ci --include=dev before npm run verify-stack. If critical dev dependencies are still missing after npm ci, fallback: pnpm install && pnpm run build (install pnpm first with npm i -g pnpm).',
       },
     },
     'verify-stack must fail fast with npm ci --include=dev guidance when vite is missing',
@@ -127,6 +128,8 @@ try {
       const result = JSON.parse(output);
       assert.equal(error.status, 1);
       assert.equal(result.error.code, 'VERIFY_STACK_DEVDEPS_MISSING');
+      assert.match(result.error.message, /Check NODE_ENV/);
+      assert.match(result.error.message, /NODE_ENV.*production/);
       assert.match(result.error.message, /Run npm ci --include=dev/);
       assert.match(result.error.message, /pnpm install && pnpm run build/);
       assert.match(result.error.message, /npm i -g pnpm/);
@@ -138,6 +141,27 @@ try {
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }
+
+assert.deepEqual(
+  await preflightBackendPythonVersion({
+    pythonCommand: process.execPath,
+    execPython: async () => ({ ok: true, stdout: '3.13.6\n', stderr: '' }),
+  }),
+  { ok: true, version: '3.13.6', supportedRange: '3.11-3.13' },
+  'verify-stack should accept backend Python 3.13',
+);
+
+const python314Preflight = await preflightBackendPythonVersion({
+  pythonCommand: process.execPath,
+  execPython: async () => ({ ok: true, stdout: '3.14.0\n', stderr: '' }),
+});
+assert.equal(python314Preflight.ok, false);
+assert.equal(python314Preflight.version, '3.14.0');
+assert.equal(python314Preflight.error.code, 'VERIFY_STACK_PYTHON_UNSUPPORTED');
+assert.match(python314Preflight.error.message, /Python 3\.11-3\.13/);
+assert.match(python314Preflight.error.message, /Python 3\.13/);
+assert.match(python314Preflight.error.message, /python3\.13 -m venv \.venv/);
+assert.match(python314Preflight.error.message, /\.venv\\Scripts\\python\.exe -m pip install -r backend\/requirements\.txt/);
 
 const cleanGitRoot = mkdtempSync(join(tmpdir(), 'life-index-verify-stack-clean-git-'));
 try {

@@ -108,7 +108,7 @@ AI+ 星轨把问题交给你的宿主 agent，由宿主 agent 使用 Life Index 
 前置：
 
 - Node.js 22+
-- Python 3.12-3.13（当前依赖的 `pydantic-core` / `Pillow` 尚未覆盖 Python 3.14 wheel）
+- Python 3.11-3.13（当前依赖的 `pydantic-core` / `Pillow` 尚未覆盖 Python 3.14 wheel）
 - Life Index CLI 已安装并可在本机运行
 - 可选：宿主 agent，用于 AI+ grounded answer / smart metadata
 - 可选：`cloudflared`，用于临时手机访问（唯一支持的公网隧道）

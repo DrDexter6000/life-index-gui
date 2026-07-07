@@ -11,6 +11,9 @@ export const DEFAULT_BACKEND_PORT = 8000;
 export const DEFAULT_FRONTEND_PORT = 5173;
 const OWNERSHIP_ENV = 'LIFE_INDEX_GUI_AGENT_OPS';
 const moduleRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const BACKEND_PYTHON_SUPPORTED_RANGE = '3.11-3.13';
+const BACKEND_PYTHON_MIN = { major: 3, minor: 11 };
+const BACKEND_PYTHON_MAX = { major: 3, minor: 13 };
 
 function commandName(name) {
   return process.platform === 'win32' && !name.endsWith('.cmd') ? `${name}.cmd` : name;
@@ -138,12 +141,78 @@ export function preflightVerifyStackDevDependencies({
       missing,
       error: {
         code: 'VERIFY_STACK_DEVDEPS_MISSING',
-        message: `Missing required dev dependency: ${missing.join(', ')}. Run npm ci --include=dev before npm run verify-stack. If critical dev dependencies are still missing after npm ci, fallback: pnpm install && pnpm run build (install pnpm first with npm i -g pnpm).`,
+        message: `Missing required dev dependency: ${missing.join(', ')}. Check NODE_ENV first; if it is production, clear it before running npm ci --include=dev. Run npm ci --include=dev before npm run verify-stack. If critical dev dependencies are still missing after npm ci, fallback: pnpm install && pnpm run build (install pnpm first with npm i -g pnpm).`,
       },
     };
   }
 
   return { ok: true, missing: [] };
+}
+
+function comparePythonVersion(version, boundary) {
+  if (version.major !== boundary.major) {
+    return version.major - boundary.major;
+  }
+  return version.minor - boundary.minor;
+}
+
+function backendPythonGuidance(versionText) {
+  return `Life Index GUI backend supports Python ${BACKEND_PYTHON_SUPPORTED_RANGE} until upstream pydantic-core/Pillow wheels cover Python 3.14. Detected Python ${versionText}. Create a Python 3.13 virtual environment and reinstall backend dependencies: python3.13 -m venv .venv && . .venv/bin/activate && python -m pip install -r backend/requirements.txt. On Windows PowerShell: py -3.13 -m venv .venv; .venv\\Scripts\\python.exe -m pip install -r backend/requirements.txt.`;
+}
+
+export async function preflightBackendPythonVersion({
+  pythonCommand = resolvePythonCommand({ repoRoot: moduleRepoRoot }),
+  execPython = (command, args, options) => execFileAsync(command, args, options),
+} = {}) {
+  const result = await execPython(
+    pythonCommand,
+    ['-c', 'import sys; print(".".join(map(str, sys.version_info[:3])))'],
+    { cwd: moduleRepoRoot },
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      supportedRange: BACKEND_PYTHON_SUPPORTED_RANGE,
+      error: {
+        code: 'VERIFY_STACK_PYTHON_UNAVAILABLE',
+        message: `Could not run backend Python command "${pythonCommand}". Use Python ${BACKEND_PYTHON_SUPPORTED_RANGE}; for example: python3.13 -m venv .venv.`,
+      },
+    };
+  }
+
+  const versionText = String(result.stdout ?? '').trim();
+  const match = versionText.match(/^(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (!match) {
+    return {
+      ok: false,
+      supportedRange: BACKEND_PYTHON_SUPPORTED_RANGE,
+      error: {
+        code: 'VERIFY_STACK_PYTHON_VERSION_UNKNOWN',
+        message: `Could not parse backend Python version from "${versionText}". Use Python ${BACKEND_PYTHON_SUPPORTED_RANGE}; for example: python3.13 -m venv .venv.`,
+      },
+    };
+  }
+
+  const version = {
+    major: Number.parseInt(match[1], 10),
+    minor: Number.parseInt(match[2], 10),
+  };
+  const supported = comparePythonVersion(version, BACKEND_PYTHON_MIN) >= 0
+    && comparePythonVersion(version, BACKEND_PYTHON_MAX) <= 0;
+
+  if (!supported) {
+    return {
+      ok: false,
+      version: versionText,
+      supportedRange: BACKEND_PYTHON_SUPPORTED_RANGE,
+      error: {
+        code: 'VERIFY_STACK_PYTHON_UNSUPPORTED',
+        message: backendPythonGuidance(versionText),
+      },
+    };
+  }
+
+  return { ok: true, version: versionText, supportedRange: BACKEND_PYTHON_SUPPORTED_RANGE };
 }
 
 export async function preflightWorktreeStatus({ repoRoot = moduleRepoRoot } = {}) {
@@ -425,6 +494,14 @@ export async function runVerifyStack({
       result.warnings.push(worktreeStatus.warning);
     }
 
+    const launch = createLaunchCommands({ repoRoot: root, backendPort, frontendPort });
+    const pythonPreflight = await preflightBackendPythonVersion({ pythonCommand: launch.backend.command });
+    result.steps.push({ name: 'backend-python', ...pythonPreflight });
+    if (!pythonPreflight.ok) {
+      result.error = pythonPreflight.error;
+      return result;
+    }
+
     const preflight = preflightVerifyStackDevDependencies({ repoRoot: root });
     result.steps.push({ name: 'dev-dependencies', ...preflight });
     if (!preflight.ok) {
@@ -441,7 +518,6 @@ export async function runVerifyStack({
       }
     }
 
-    const launch = createLaunchCommands({ repoRoot: root, backendPort, frontendPort });
     const backend = spawnTracked(launch.backend.command, launch.backend.args, {
       cwd: root,
       name: 'backend',
