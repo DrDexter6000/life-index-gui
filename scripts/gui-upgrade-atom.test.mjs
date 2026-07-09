@@ -40,6 +40,18 @@ function runGitForInjection(command, args, { cwd }) {
       stderr: '',
     };
   }
+  if (gitCommandId(command, args) === 'npm run sync-skill') {
+    return {
+      status: 0,
+      stdout: `${JSON.stringify({
+        delivered: true,
+        skill: 'life-index-gui',
+        target: join(cwd, '.fixture-skills', 'life-index-gui', 'SKILL.md'),
+        action: 'updated',
+      })}\n`,
+      stderr: '',
+    };
+  }
 
   const result = spawnSync(command, args, {
     cwd,
@@ -170,6 +182,10 @@ function writeFixtureNpm(root) {
       '  node scripts/fixture-verify-stack.mjs',
       '  exit $?',
       'fi',
+      'if [ "$1" = "run" ] && [ "$2" = "sync-skill" ]; then',
+      "  printf '%s\\n' '{\"delivered\":true,\"skill\":\"life-index-gui\",\"target\":\"fixture-skill\",\"action\":\"updated\"}'",
+      '  exit 0',
+      'fi',
       'if [ "$1" = "ci" ] && [ "$2" = "--include=dev" ]; then',
       "  printf '%s\\n' 'installed dev dependencies'",
       '  exit 0',
@@ -199,6 +215,10 @@ function writeFixtureNpm(root) {
       'if "%1"=="run" if "%2"=="verify-stack" (',
       '  node scripts\\fixture-verify-stack.mjs',
       '  exit /b %ERRORLEVEL%',
+      ')',
+      'if "%1"=="run" if "%2"=="sync-skill" (',
+      '  echo {"delivered":true,"skill":"life-index-gui","target":"fixture-skill","action":"updated"}',
+      '  exit /b 0',
       ')',
       'if "%1"=="ci" if "%2"=="--include=dev" (',
       '  echo installed dev dependencies',
@@ -501,6 +521,26 @@ function assertVerificationContract(verification) {
   }
 }
 
+function assertSkillDeliveryContract(skillDelivery) {
+  assert.ok(skillDelivery, 'plan data must include skill_delivery');
+  for (const field of [
+    'skill_name',
+    'sync_command',
+    'delivered',
+    'last_result',
+  ]) {
+    assert.ok(Object.hasOwn(skillDelivery, field), `skill_delivery must include ${field}`);
+  }
+  assert.equal(skillDelivery.skill_name, 'life-index-gui');
+  assert.equal(skillDelivery.sync_command, 'npm run sync-skill');
+  assert.equal(typeof skillDelivery.delivered, 'boolean');
+  if (skillDelivery.last_result !== null) {
+    assert.equal(typeof skillDelivery.last_result.ok, 'boolean');
+    assert.ok(Object.hasOwn(skillDelivery.last_result, 'stdout'), 'last_result must include stdout');
+    assert.ok(Object.hasOwn(skillDelivery.last_result, 'stderr'), 'last_result must include stderr');
+  }
+}
+
 function assertBlockedApply(cwd, expectedActionId) {
   const applyResult = apply(cwd);
   assert.equal(applyResult.result.status, 1);
@@ -512,6 +552,7 @@ function assertBlockedApply(cwd, expectedActionId) {
 }
 
 const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+assert.equal(packageJson.scripts['sync-skill'], 'node scripts/sync-skill.mjs');
 assert.equal(packageJson.scripts['gui-upgrade:plan'], 'node scripts/gui-upgrade.mjs --plan --json');
 assert.equal(packageJson.scripts['gui-upgrade:apply'], 'node scripts/gui-upgrade.mjs --apply --json');
 assert.match(
@@ -558,6 +599,10 @@ assert.match(
     assertVerificationContract(currentPlan.data.verification);
     assert.equal(currentPlan.data.verification.verified, false);
     assert.equal(currentPlan.data.verification.last_result, null);
+    assertSkillDeliveryContract(currentPlan.data.skill_delivery);
+    assert.equal(currentPlan.data.skill_delivery.delivered, false);
+    assert.equal(currentPlan.data.skill_delivery.last_result, null);
+    assert.equal(currentPlan.data.actions.some((action) => action.id === 'sync_skill'), true);
     assert.equal(currentPlan.data.recommended_next_step.id, 'verify_stack');
     assert.equal(currentPlan.data.recommended_next_step.command, 'npm run verify-stack');
     assert.equal(currentPlan.data.recommended_next_step.side_effect, 'write');
@@ -572,11 +617,16 @@ assert.match(
     assert.equal(applyResult.json.mode, 'apply');
     assert.deepEqual(applyResult.json.data.applied_actions, [
       { id: 'verify_stack', command: 'npm run verify-stack' },
+      { id: 'sync_skill', command: 'npm run sync-skill' },
     ]);
     assertVerificationContract(applyResult.json.data.verification);
     assert.equal(applyResult.json.data.verification.verified, true);
     assert.equal(applyResult.json.data.verification.last_result.ok, true);
     assert.match(applyResult.json.data.verification.last_result.stdout, /fixture verify-stack/);
+    assertSkillDeliveryContract(applyResult.json.data.skill_delivery);
+    assert.equal(applyResult.json.data.skill_delivery.delivered, true);
+    assert.equal(applyResult.json.data.skill_delivery.last_result.ok, true);
+    assert.match(applyResult.json.data.skill_delivery.last_result.stdout, /life-index-gui/);
     assert.equal(applyResult.json.data.recommended_next_step.id, 'none');
     assertNoForbiddenCommands(applyResult.json);
   } finally {
@@ -644,6 +694,46 @@ assert.match(
     assert.ok(applyResult.error.action_ids.includes('clear_node_env_production'));
     assert.equal(invoked.includes('npm run verify-stack'), false);
     assert.deepEqual(applyResult.data.applied_actions, []);
+    assertNoForbiddenCommands(applyResult);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = makeRemoteFixture();
+  try {
+    const invoked = [];
+    const applyResult = applyGuiUpgrade({
+      repoRoot: fixture.work,
+      commandRunner(command, args, context) {
+        const id = gitCommandId(command, args);
+        invoked.push(id);
+        if (id === 'npm run sync-skill') {
+          return {
+            status: 1,
+            stdout: `${JSON.stringify({ delivered: false, reason: 'host_skill_directory_not_found' })}\n`,
+            stderr: '',
+            message: 'simulated sync-skill failure',
+          };
+        }
+        return runGitForInjection(command, args, context);
+      },
+    });
+    assert.equal(applyResult.success, false);
+    assert.equal(applyResult.mode, 'apply');
+    assert.equal(applyResult.error.code, 'GUI_UPGRADE_SYNC_SKILL_FAILED');
+    assert.match(applyResult.data.skill_error.stdout, /host_skill_directory_not_found/);
+    assert.match(applyResult.data.skill_error.message, /simulated sync-skill failure/);
+    assert.equal(invoked.includes('npm run verify-stack'), true);
+    assert.equal(invoked.includes('npm run sync-skill'), true);
+    assert.deepEqual(applyResult.data.applied_actions, [
+      { id: 'verify_stack', command: 'npm run verify-stack' },
+    ]);
+    assertSkillDeliveryContract(applyResult.data.skill_delivery);
+    assert.equal(applyResult.data.skill_delivery.delivered, false);
+    assert.equal(applyResult.data.skill_delivery.last_result.ok, false);
+    assert.match(applyResult.data.skill_delivery.last_result.stdout, /host_skill_directory_not_found/);
     assertNoForbiddenCommands(applyResult);
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
@@ -993,6 +1083,7 @@ assert.match(
     assert.deepEqual(applyResult.data.applied_actions, [
       { id: 'pip_install_backend_requirements', command: 'python-fixture -m pip install -r backend/requirements.txt' },
       { id: 'verify_stack', command: 'npm run verify-stack' },
+      { id: 'sync_skill', command: 'npm run sync-skill' },
     ]);
     assert.equal(applyResult.data.python.backend_requirements_present, true);
     assert.deepEqual(applyResult.data.python.missing_backend_modules, []);
@@ -1071,6 +1162,7 @@ assert.match(
       { id: 'git_pull_ff_only', command: 'git pull --ff-only' },
       { id: 'pip_install_backend_requirements', command: 'python-fixture -m pip install -r backend/requirements.txt' },
       { id: 'verify_stack', command: 'npm run verify-stack' },
+      { id: 'sync_skill', command: 'npm run sync-skill' },
     ]);
     assert.equal(applyResult.data.python.backend_requirements_present, true);
     assert.equal(applyResult.data.recommended_next_step.id, 'none');
@@ -1203,6 +1295,7 @@ assert.match(
       { id: 'git_pull_ff_only', command: 'git pull --ff-only' },
       { id: 'npm_ci_include_dev', command: 'npm ci --include=dev' },
       { id: 'verify_stack', command: 'npm run verify-stack' },
+      { id: 'sync_skill', command: 'npm run sync-skill' },
     ]);
     assert.equal(applyResult.data.node.dev_dependencies_present, true);
     assert.equal(applyResult.data.recommended_next_step.id, 'none');
@@ -1336,6 +1429,7 @@ assert.match(
     assert.deepEqual(applyResult.data.applied_actions, [
       { id: 'npm_ci_include_dev', command: 'npm ci --include=dev' },
       { id: 'verify_stack', command: 'npm run verify-stack' },
+      { id: 'sync_skill', command: 'npm run sync-skill' },
     ]);
     assert.equal(applyResult.data.node.dev_dependencies_present, true);
     assert.deepEqual(applyResult.data.node.missing_dev_dependencies, []);
@@ -1841,6 +1935,7 @@ assert.match(
       { id: 'git_fetch_prune', command: 'git fetch --prune' },
       { id: 'git_pull_ff_only', command: 'git pull --ff-only' },
       { id: 'verify_stack', command: 'npm run verify-stack' },
+      { id: 'sync_skill', command: 'npm run sync-skill' },
     ]);
     assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), remoteHead);
     assert.equal(applyResult.json.data.repo.freshness, 'current');

@@ -2,11 +2,11 @@ import { useCallback, useMemo, useState, type CSSProperties, type MouseEvent as 
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useUIStore } from '@/stores/ui';
 import { useTranslation } from '@/hooks/useTranslation';
-import { useHostAgentHealth } from '@/hooks/useHostAgent';
-import { getHostAgentCapability } from '@/lib/health-status';
+import { useHostAgentCapability } from '@/hooks/useHostAgent';
+import { getStarweaveConnectionState } from '@/lib/health-status';
 import { MobileMenu, type NavItem, type NavItemRenderState, getMobileLinkStyle, getMobileCnStyle, getMobileEnStyle, getActiveDotStyle } from './MobileMenu';
 import { PublicLinkDialog } from './PublicLinkDialog';
-import { StarweaveConsole, getStarweaveConnectionState } from './StarweaveConsole';
+import { StarweaveConsole } from './StarweaveConsole';
 
 const navItems: NavItem[] = [
   { path: '/home', labelKey: 'navHome', cn: '写入', en: 'WRITE' },
@@ -92,11 +92,7 @@ export function TopNavBar() {
   const [starweaveConsoleOpen, setStarweaveConsoleOpen] = useState(false);
   const { closeMobileMenu, lang, toggleLang, appPhase, setAppPhase, resetHome, setHomeActivated } = useUIStore();
   const { t } = useTranslation();
-  const { data: hostAgentHealth, isLoading: healthLoading, isError: healthIsError } = useHostAgentHealth();
-  const hostCapability = getHostAgentCapability(hostAgentHealth, {
-    isLoading: healthLoading,
-    isError: healthIsError,
-  });
+  const hostCapability = useHostAgentCapability();
   const starweaveConnectionState = getStarweaveConnectionState(hostCapability);
   const starweaveDotStyle = starweaveConnectionState === 'online'
     ? AGENT_CONNECTED_DOT_STYLE

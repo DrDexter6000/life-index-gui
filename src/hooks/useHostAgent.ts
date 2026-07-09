@@ -6,6 +6,7 @@ import {
   type HostAgentQueryResponse,
   type HostAgentStreamEvent,
 } from '@/lib/api-client';
+import { getHostAgentCapability } from '@/lib/health-status';
 
 export type HostAgentStreamStatus = 'idle' | 'connecting' | 'streaming' | 'complete' | 'error';
 export type HostAgentStreamPhase =
@@ -76,6 +77,14 @@ export function useHostAgentHealth() {
     queryFn: () => hostAgentAPI.getHealth(),
     staleTime: 10 * 1000,
     retry: 1,
+  });
+}
+
+export function useHostAgentCapability() {
+  const { data, isLoading, isError } = useHostAgentHealth();
+  return getHostAgentCapability(data, {
+    isLoading,
+    isError,
   });
 }
 

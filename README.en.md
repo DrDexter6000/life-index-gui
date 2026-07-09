@@ -149,6 +149,16 @@ Production build:
 npm run build
 ```
 
+### Teach Your Agent Where The GUI Lives
+
+After installation, run:
+
+```bash
+npm run sync-skill
+```
+
+This writes the `life-index-gui` launch skill into the existing host skill registry with this GUI checkout's absolute path, start/stop commands, and default URL.
+
 ## Upgrade
 
 Host agents should start with the GUI upgrade atom:

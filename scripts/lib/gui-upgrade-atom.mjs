@@ -15,6 +15,7 @@ const BACKEND_REQUIREMENTS_RELATIVE = 'backend/requirements.txt';
 const CLI_MINIMUM_VERSION_FALLBACK = '1.3.7';
 const CLI_VERSION_COMMAND = 'life-index --version';
 const VERIFY_STACK_COMMAND = 'npm run verify-stack';
+const SYNC_SKILL_COMMAND = 'npm run sync-skill';
 const CLI_FEATURE_GATES = [
   {
     id: 'entity_review_cards',
@@ -738,6 +739,18 @@ function makeVerifyStackAction() {
   };
 }
 
+function makeSyncSkillAction() {
+  return {
+    id: 'sync_skill',
+    description: 'Refresh the Life Index GUI host-agent skill after stack verification succeeds.',
+    side_effect: 'write',
+    command: SYNC_SKILL_COMMAND,
+    reason: 'The GUI stack is verified; deliver the current launch/operation skill to the host agent registry.',
+    safe_to_run: true,
+    requires_human: false,
+  };
+}
+
 function makeAppliedGitAction(id, command) {
   return { id, command };
 }
@@ -782,6 +795,15 @@ function makeVerifyError(command, result) {
   };
 }
 
+function makeSkillError(command, result) {
+  return {
+    command,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    message: result.message,
+  };
+}
+
 function makeVerificationData(verification = {}) {
   return {
     verify_stack_command: VERIFY_STACK_COMMAND,
@@ -791,7 +813,16 @@ function makeVerificationData(verification = {}) {
   };
 }
 
-function makeApplyFailure({ plan, code, message, appliedActions, gitError, npmError, pipError, verifyError }) {
+function makeSkillDeliveryData(skillDelivery = {}) {
+  return {
+    skill_name: 'life-index-gui',
+    sync_command: SYNC_SKILL_COMMAND,
+    delivered: Boolean(skillDelivery.delivered),
+    last_result: skillDelivery.lastResult ?? null,
+  };
+}
+
+function makeApplyFailure({ plan, code, message, appliedActions, gitError, npmError, pipError, verifyError, skillError }) {
   return {
     ...plan,
     success: false,
@@ -803,6 +834,7 @@ function makeApplyFailure({ plan, code, message, appliedActions, gitError, npmEr
       ...(npmError ? { npm_error: npmError } : {}),
       ...(pipError ? { pip_error: pipError } : {}),
       ...(verifyError ? { verify_error: verifyError } : {}),
+      ...(skillError ? { skill_error: skillError } : {}),
     },
     error: {
       code,
@@ -837,12 +869,19 @@ function selectRecommendedNextStep(actions) {
 
 // Plan builder.
 
-function buildPlanData({ repoRoot = process.cwd(), env = process.env, commandRunner, verification } = {}) {
+function buildPlanData({
+  repoRoot = process.cwd(),
+  env = process.env,
+  commandRunner,
+  verification,
+  skillDelivery,
+} = {}) {
   const repo = detectRepo(repoRoot, commandRunner);
   const node = detectNode(repo.path, env, commandRunner);
   const python = detectPython(repo.path, env, commandRunner);
   const cliDependency = detectCliDependency(repo.path, commandRunner);
   const verificationData = makeVerificationData(verification);
+  const skillDeliveryData = makeSkillDeliveryData(skillDelivery);
   const actions = [];
   let partial = false;
 
@@ -887,6 +926,9 @@ function buildPlanData({ repoRoot = process.cwd(), env = process.env, commandRun
   if (!hasUnsafeAction && !verificationData.verified) {
     actions.push(makeVerifyStackAction());
   }
+  if (!hasUnsafeAction && !skillDeliveryData.delivered) {
+    actions.push(makeSyncSkillAction());
+  }
 
   return {
     repo,
@@ -894,6 +936,7 @@ function buildPlanData({ repoRoot = process.cwd(), env = process.env, commandRun
     python,
     cli_dependency: cliDependency,
     verification: verificationData,
+    skill_delivery: skillDeliveryData,
     actions,
     recommended_next_step: selectRecommendedNextStep(actions),
     partial,
@@ -918,10 +961,14 @@ export function applyGuiUpgrade(options = {}) {
     verified: false,
     lastResult: null,
   };
+  const skillDeliveryState = {
+    delivered: false,
+    lastResult: null,
+  };
   const maxApplySteps = 8;
 
   for (let step = 0; step < maxApplySteps; step += 1) {
-    const planOptions = { ...options, verification: verificationState };
+    const planOptions = { ...options, verification: verificationState, skillDelivery: skillDeliveryState };
     const plan = planGuiUpgrade(planOptions);
     const blockedActions = plan.data.actions.filter(
       (action) => !action.safe_to_run || action.requires_human,
@@ -1078,10 +1125,57 @@ export function applyGuiUpgrade(options = {}) {
       };
       appliedActions.push(makeAppliedAction('verify_stack', VERIFY_STACK_COMMAND));
       continue;
+    } else if (action.id === 'sync_skill') {
+      const syncResult = tryRunCommand('npm', ['run', 'sync-skill'], {
+        cwd,
+        commandRunner: options.commandRunner,
+      });
+      let syncPayload = null;
+      if (syncResult.ok) {
+        try {
+          syncPayload = JSON.parse(syncResult.stdout);
+        } catch (error) {
+          syncResult.ok = false;
+          syncResult.message = `sync-skill stdout was not JSON: ${error.message}`;
+        }
+      }
+      if (syncResult.ok && syncPayload?.delivered !== true) {
+        syncResult.ok = false;
+        syncResult.message = syncPayload?.message || 'sync-skill did not report delivered:true.';
+      }
+      if (!syncResult.ok) {
+        skillDeliveryState.delivered = false;
+        skillDeliveryState.lastResult = {
+          ok: false,
+          stdout: syncResult.stdout,
+          stderr: syncResult.stderr,
+        };
+        return makeApplyFailure({
+          plan: {
+            ...plan,
+            data: {
+              ...plan.data,
+              skill_delivery: makeSkillDeliveryData(skillDeliveryState),
+            },
+          },
+          code: 'GUI_UPGRADE_SYNC_SKILL_FAILED',
+          message: 'npm run sync-skill failed; GUI upgrade apply stopped without recording the failed skill sync.',
+          appliedActions,
+          skillError: makeSkillError(SYNC_SKILL_COMMAND, syncResult),
+        });
+      }
+      skillDeliveryState.delivered = true;
+      skillDeliveryState.lastResult = {
+        ok: true,
+        stdout: syncResult.stdout,
+        stderr: syncResult.stderr,
+      };
+      appliedActions.push(makeAppliedAction('sync_skill', SYNC_SKILL_COMMAND));
+      continue;
     }
   }
 
-  const finalPlan = planGuiUpgrade({ ...options, verification: verificationState });
+  const finalPlan = planGuiUpgrade({ ...options, verification: verificationState, skillDelivery: skillDeliveryState });
   return {
     ...finalPlan,
     success: false,

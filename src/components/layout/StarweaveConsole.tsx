@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { Link } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
 import { useTranslation } from '@/hooks/useTranslation';
-import type { HostAgentCapability } from '@/lib/health-status';
-
-export type StarweaveConnectionState = 'online' | 'offline' | 'checking';
+import {
+  getStarweaveConnectionState,
+  type HostAgentCapability,
+  type StarweaveConnectionState,
+} from '@/lib/health-status';
 
 interface StarweaveConsoleProps {
   isOpen: boolean;
@@ -54,11 +56,6 @@ const LANGUAGE_BUTTON_STYLE = {
   fontFamily: 'var(--font-control)',
   letterSpacing: '0.08em',
 } as const satisfies CSSProperties;
-
-export function getStarweaveConnectionState(capability: HostAgentCapability): StarweaveConnectionState {
-  if (capability.status === 'checking') return 'checking';
-  return capability.canSendEvidence ? 'online' : 'offline';
-}
 
 function getStateDotStyle(state: StarweaveConnectionState): CSSProperties {
   if (state === 'online') return ONLINE_DOT_STYLE;
@@ -218,7 +215,7 @@ export function StarweaveConsole({
                   {t('starweaveConnectGuideBody')}
                 </p>
                 <Link
-                  to="/maintenance"
+                  to="/maintenance/host-agent"
                   className="mt-2 inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--color-cyan)] hover:text-[var(--color-primary)]"
                   onClick={onClose}
                 >

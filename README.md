@@ -150,6 +150,16 @@ http://127.0.0.1:5173
 npm run build
 ```
 
+### 让你的 agent 找得到 GUI
+
+安装后运行：
+
+```bash
+npm run sync-skill
+```
+
+这会把 `life-index-gui` 启动技能写入已存在的宿主技能目录，记录当前 GUI 绝对安装路径、启动/停止命令和默认 URL。
+
 ## 升级
 
 宿主 agent 应优先使用 GUI upgrade atom：

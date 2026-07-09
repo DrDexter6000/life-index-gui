@@ -12,6 +12,7 @@ const Archives = lazy(() => import('@/app/routes/Archives'));
 const JournalDetail = lazy(() => import('@/app/routes/JournalDetail'));
 const EmptyState = lazy(() => import('@/app/routes/EmptyState'));
 const HealthCenter = lazy(() => import('@/app/routes/HealthCenter'));
+const HostAgentGuide = lazy(() => import('@/app/routes/HostAgentGuide'));
 const EntityGraph = lazy(() => import('@/app/routes/EntityGraph'));
 const EntityProfile = lazy(() => import('@/app/routes/EntityProfile'));
 const IndexDiagnostics = lazy(() => import('@/app/routes/IndexDiagnostics'));
@@ -45,6 +46,7 @@ export default function App() {
               <Route path="/maintenance" element={<DiagnosticCenterLayout />}>
                 <Route index element={<Navigate to="/maintenance/health" replace />} />
                 <Route path="health" element={<HealthCenter />} />
+                <Route path="host-agent" element={<HostAgentGuide />} />
                 <Route path="entities" element={<EntityGraph />} />
                 <Route path="index" element={<IndexDiagnostics />} />
                 <Route path="index-tree" element={<IndexTreeDiagnostics />} />

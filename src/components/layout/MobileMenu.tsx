@@ -3,8 +3,7 @@ import { Link } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import { useUIStore } from '@/stores/ui';
 import { useTranslation } from '@/hooks/useTranslation';
-import type { HostAgentCapability } from '@/lib/health-status';
-import { getStarweaveConnectionState } from './StarweaveConsole';
+import { getStarweaveConnectionState, type HostAgentCapability } from '@/lib/health-status';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

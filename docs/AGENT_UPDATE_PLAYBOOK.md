@@ -5,8 +5,8 @@ This playbook is for a host agent updating a local Life Index stack. The CLI ser
 ## Order
 
 Run the CLI update first, then the GUI upgrade atom. The GUI atom performs the
-safe GUI dependency recovery sequence and runs stack verification before it
-reports a successful apply.
+safe GUI dependency recovery sequence, runs stack verification, and refreshes
+the GUI host-agent skill before it reports a successful apply.
 
 ## 1. Update Life Index CLI
 
@@ -40,9 +40,9 @@ fail-closed apply checks. It covers git freshness/fast-forward, Node
 devDependencies, `NODE_ENV` / npm omit guards, and Python backend dependency
 preflight/install. It also checks the installed Life Index CLI dependency and
 feature gates, including review cards requiring CLI `1.4.4+`. After all safe
-dependency and git actions are complete, apply runs `npm run verify-stack` and
-reports the verification result in JSON. It still does not run public sync,
-tags, releases, or CLI upgrade writes.
+dependency and git actions are complete, apply runs `npm run verify-stack`, then
+`npm run sync-skill`, and reports both results in JSON. It still does not run
+public sync, tags, releases, or CLI upgrade writes.
 
 If the GUI atom reports `resolve_cli_dependency`, stop the GUI update and fix
 the CLI first through the CLI-owned upgrade flow, for example
@@ -125,6 +125,19 @@ Expected behavior:
 - stops the backend and preview before exiting
 
 If ports are occupied, the verifier only stops processes it can prove belong to this GUI checkout. Unknown processes are never killed.
+
+After a manual verification path succeeds, refresh the GUI host-agent skill so
+future host-agent sessions know this checkout's absolute path and launch
+commands:
+
+```bash
+npm run sync-skill
+```
+
+The command writes `life-index-gui/SKILL.md` into exactly one detected host
+skill registry. If no registry is present, or multiple possible targets are
+present, it exits non-zero with `delivered:false` JSON instead of silently
+claiming success.
 
 To clean project-owned leftovers explicitly:
 

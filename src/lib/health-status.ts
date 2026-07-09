@@ -49,6 +49,8 @@ export interface HostAgentCapability {
   reason: HostAgentCapabilityReason;
 }
 
+export type StarweaveConnectionState = 'online' | 'offline' | 'checking';
+
 export interface HostAgentCapabilityOptions {
   isLoading?: boolean;
   isError?: boolean;
@@ -134,4 +136,9 @@ export function getHostAgentCapability(
     canSendEvidence: anyAvailable,
     reason,
   };
+}
+
+export function getStarweaveConnectionState(capability: HostAgentCapability): StarweaveConnectionState {
+  if (capability.status === 'checking') return 'checking';
+  return capability.canSendEvidence ? 'online' : 'offline';
 }

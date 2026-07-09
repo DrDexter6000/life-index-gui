@@ -1,7 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { GlassCard } from '@/components/celestial/GlassCard';
 import { CelestialLoader } from '@/components/celestial/CelestialLoader';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useHostAgentCapability } from '@/hooks/useHostAgent';
 import {
   useHealthCheck,
   useDataAudit,
@@ -15,8 +17,13 @@ import type {
   VerifyDiagnosticsResponse,
   CacheDryRunResponse,
 } from '@/lib/api-client';
+import {
+  getStarweaveConnectionState,
+  type HostAgentCapability,
+  type StarweaveConnectionState,
+} from '@/lib/health-status';
 
-type HealthState = 'healthy' | 'degraded' | 'unavailable' | 'loading' | 'error';
+type HealthState = 'healthy' | 'attention' | 'degraded' | 'unavailable' | 'loading' | 'error';
 
 function classifyHealth(data: HealthResponse | undefined, isError: boolean): HealthState {
   if (isError) return 'error';
@@ -28,6 +35,7 @@ function classifyHealth(data: HealthResponse | undefined, isError: boolean): Hea
 
 const STATUS_ICON: Record<HealthState, string> = {
   healthy: 'check_circle',
+  attention: 'warning',
   degraded: 'warning',
   unavailable: 'cloud_off',
   loading: 'hourglass_empty',
@@ -36,6 +44,7 @@ const STATUS_ICON: Record<HealthState, string> = {
 
 const STATUS_COLOR: Record<HealthState, string> = {
   healthy: 'var(--color-gold)',
+  attention: 'var(--color-amber)',
   degraded: 'var(--color-amber)',
   unavailable: 'var(--color-coral)',
   loading: 'var(--color-muted)',
@@ -87,6 +96,28 @@ function extractEntityProfilesStaleHint(data: HealthResponse | undefined): Entit
   return null;
 }
 
+function hasIndexDiagnosticsAttention({
+  indexCheck,
+  verify,
+  cacheDryRun,
+  error,
+}: {
+  indexCheck: IndexCheckResponse | undefined;
+  verify: VerifyDiagnosticsResponse | undefined;
+  cacheDryRun: CacheDryRunResponse | undefined;
+  error: boolean;
+}): boolean {
+  const issues = normalizeIssues(indexCheck?.issues);
+  const verifyIssues = verify?.issues_count ?? 0;
+  const cacheWouldRebuild = cacheDryRun?.cache_version?.would_rebuild === true;
+  return error || indexCheck?.healthy === false || issues.length > 0 || verifyIssues > 0 || cacheWouldRebuild;
+}
+
+function aggregateHealthState(baseState: HealthState, needsAttention: boolean): HealthState {
+  if (baseState === 'healthy' && needsAttention) return 'attention';
+  return baseState;
+}
+
 /**
  * HealthCenter — user-facing maintenance/health diagnostics surface.
  *
@@ -129,7 +160,7 @@ export default function HealthCenter() {
     isError: cacheDryRunError,
   } = useIndexCacheDryRun();
 
-  const state = healthLoading ? 'loading' : classifyHealth(healthData, healthError);
+  const hostCapability = useHostAgentCapability();
 
   function handleRetry() {
     queryClient.invalidateQueries({ queryKey: ['health'] });
@@ -139,6 +170,14 @@ export default function HealthCenter() {
   const auditAnomalyCount = auditData?.data?.anomalies?.length ?? 0;
   const auditHasAnomalies = auditData?.success === true && auditAnomalyCount > 0;
   const entityProfilesStaleHint = extractEntityProfilesStaleHint(healthData);
+  const indexDiagnosticsNeedsAttention = hasIndexDiagnosticsAttention({
+    indexCheck: indexCheckData,
+    verify: verifyData,
+    cacheDryRun: cacheDryRunData,
+    error: indexCheckError || verifyError || cacheDryRunError,
+  });
+  const baseState = healthLoading ? 'loading' : classifyHealth(healthData, healthError);
+  const state = aggregateHealthState(baseState, auditHasAnomalies || indexDiagnosticsNeedsAttention);
 
   return (
     <>
@@ -227,6 +266,8 @@ export default function HealthCenter() {
           </div>
         )}
       </GlassCard>
+
+      <AiPlusConnectionCard capability={hostCapability} t={t} />
 
       {/* Data Audit Card */}
       {!auditLoading && (
@@ -359,6 +400,84 @@ export default function HealthCenter() {
   );
 }
 
+function AiPlusConnectionCard({
+  capability,
+  t,
+}: {
+  capability: HostAgentCapability;
+  t: (key: string) => string;
+}) {
+  const state = getStarweaveConnectionState(capability);
+  const isConnected = state === 'online';
+  const isChecking = state === 'checking';
+  const statusKey = isConnected
+    ? 'aiPlusConnectionConnected'
+    : isChecking
+      ? 'aiPlusConnectionChecking'
+      : 'aiPlusConnectionDisconnected';
+  const descriptionKey = isConnected
+    ? 'aiPlusConnectionConnectedDesc'
+    : isChecking
+      ? 'aiPlusConnectionCheckingDesc'
+      : 'aiPlusConnectionDisconnectedDesc';
+
+  return (
+    <div data-testid="ai-plus-status-card">
+      <GlassCard className="p-6 mb-6">
+        <div className="flex items-start gap-4">
+          <span
+            className="material-symbols-outlined text-3xl flex-shrink-0"
+            style={{ color: getAiPlusStatusColor(state) }}
+            aria-hidden="true"
+          >
+            {isConnected ? 'hub' : isChecking ? 'hourglass_empty' : 'radio_button_unchecked'}
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-semibold text-[var(--color-primary)]">
+                {t('aiPlusConnectionTitle')}
+              </h2>
+              <span
+                className="rounded-full border px-2 py-1 text-xs font-semibold uppercase tracking-[0.08em]"
+                style={{
+                  borderColor: getAiPlusStatusBorderColor(state),
+                  color: getAiPlusStatusColor(state),
+                }}
+              >
+                {t(statusKey)}
+              </span>
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-[var(--color-secondary)]">
+              {t(descriptionKey)}
+            </p>
+            {!isConnected && (
+              <Link
+                to="/maintenance/host-agent"
+                className="mt-3 inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--color-cyan)] hover:text-[var(--color-primary)]"
+              >
+                {t('starweaveConnectGuideLink')}
+                <span className="material-symbols-outlined text-sm" aria-hidden="true">chevron_right</span>
+              </Link>
+            )}
+          </div>
+        </div>
+      </GlassCard>
+    </div>
+  );
+}
+
+function getAiPlusStatusColor(state: StarweaveConnectionState): string {
+  if (state === 'online') return 'var(--color-green)';
+  if (state === 'checking') return 'var(--color-muted)';
+  return 'var(--color-secondary)';
+}
+
+function getAiPlusStatusBorderColor(state: StarweaveConnectionState): string {
+  if (state === 'online') return 'var(--color-green-60)';
+  if (state === 'checking') return 'rgba(255,255,255,0.16)';
+  return 'rgba(255,255,255,0.14)';
+}
+
 function IndexDiagnosticsCard({
   t,
   indexCheck,
@@ -377,8 +496,7 @@ function IndexDiagnosticsCard({
   const issues = normalizeIssues(indexCheck?.issues);
   const verifyIssues = verify?.issues_count ?? 0;
   const cacheWouldRebuild = cacheDryRun?.cache_version?.would_rebuild === true;
-  const needsAttention =
-    error || indexCheck?.healthy === false || issues.length > 0 || verifyIssues > 0 || cacheWouldRebuild;
+  const needsAttention = hasIndexDiagnosticsAttention({ indexCheck, verify, cacheDryRun, error });
 
   return (
     <div data-testid="index-diagnostics-card">
@@ -514,6 +632,7 @@ function StatusTitle({
 }) {
   const titleKey: Record<HealthState, string> = {
     healthy: 'healthHealthy',
+    attention: 'healthNeedsAttentionTitle',
     degraded: 'healthDegradedTitle',
     unavailable: 'healthUnavailable',
     loading: 'healthLoading',
@@ -537,6 +656,7 @@ function StatusDescription({
 }) {
   const descKey: Record<HealthState, string> = {
     healthy: 'healthHealthyDesc',
+    attention: 'healthNeedsAttentionDesc',
     degraded: 'healthDegradedDesc',
     unavailable: 'healthUnavailableDesc',
     loading: 'healthLoading',

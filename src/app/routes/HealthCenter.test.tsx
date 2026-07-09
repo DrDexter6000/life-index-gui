@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import HealthCenter from './HealthCenter';
@@ -16,6 +16,7 @@ const mockUseEntityCheck = vi.fn();
 const mockUseEntityAudit = vi.fn();
 const mockUseEntityReview = vi.fn();
 const mockUseEntityCandidateEdges = vi.fn();
+const mockUseHostAgentCapability = vi.fn();
 const mockInvalidateQueries = vi.fn();
 
 vi.mock('@/hooks/useJournals', () => ({
@@ -30,6 +31,10 @@ vi.mock('@/hooks/useJournals', () => ({
   useEntityAudit: () => mockUseEntityAudit(),
   useEntityReview: () => mockUseEntityReview(),
   useEntityCandidateEdges: () => mockUseEntityCandidateEdges(),
+}));
+
+vi.mock('@/hooks/useHostAgent', () => ({
+  useHostAgentCapability: () => mockUseHostAgentCapability(),
 }));
 
 vi.mock('@tanstack/react-query', async () => {
@@ -234,13 +239,94 @@ const cacheDryRunWarning = {
   isError: false,
 };
 
+const cleanIndexCheck = {
+  data: {
+    healthy: true,
+    fts_count: 14,
+    vector_count: 14,
+    file_count: 14,
+    issues: [],
+  },
+  isLoading: false,
+  isError: false,
+};
+
+const cleanIndexVerify = {
+  data: {
+    success: true,
+    total_journals: 14,
+    checks: [],
+    issues_count: 0,
+  },
+  isLoading: false,
+  isError: false,
+};
+
+const cleanCacheDryRun = {
+  data: {
+    success: true,
+    dry_run: true,
+    cache_version: {
+      would_rebuild: false,
+      reasons: [],
+    },
+  },
+  isLoading: false,
+  isError: false,
+};
+
+const hostAgentOffline = {
+  status: 'unavailable',
+  canSendEvidence: false,
+  reason: 'health-check-failed',
+  features: {
+    groundedQuery: {
+      status: 'unavailable',
+      ready: false,
+      enabled: true,
+      available: false,
+      reason: 'health-check-failed',
+    },
+    smartMetadata: {
+      status: 'unavailable',
+      ready: false,
+      enabled: true,
+      available: false,
+      reason: 'health-check-failed',
+    },
+  },
+};
+
+const hostAgentOnline = {
+  status: 'ready',
+  canSendEvidence: true,
+  reason: 'ready',
+  features: {
+    groundedQuery: {
+      status: 'ready',
+      ready: true,
+      enabled: true,
+      available: true,
+      reason: 'ready',
+    },
+    smartMetadata: {
+      status: 'ready',
+      ready: true,
+      enabled: true,
+      available: true,
+      reason: 'ready',
+    },
+  },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockUseHealthCheck.mockReturnValue(healthyHealth);
   mockUseDataAudit.mockReturnValue(cleanAudit);
-  mockUseIndexCheck.mockReturnValue(indexCheckWarning);
-  mockUseIndexVerify.mockReturnValue(indexVerifyWarning);
-  mockUseIndexCacheDryRun.mockReturnValue(cacheDryRunWarning);
+  mockUseIndexCheck.mockReturnValue(cleanIndexCheck);
+  mockUseIndexVerify.mockReturnValue(cleanIndexVerify);
+  mockUseIndexCacheDryRun.mockReturnValue(cleanCacheDryRun);
+  mockUseHostAgentCapability.mockReturnValue(hostAgentOffline);
 });
 
 describe('HealthCenter', () => {
@@ -248,6 +334,46 @@ describe('HealthCenter', () => {
     renderHealthCenter();
     expect(screen.getByTestId('health-status-icon').textContent).toContain('check_circle');
     expect(screen.getByTestId('health-status-title').textContent).toContain('一切正常');
+  });
+
+  it('keeps healthy copy scoped to the CLI core engine without promising every feature', () => {
+    renderHealthCenter();
+
+    expect(screen.getByText(/CLI 核心引擎运行正常/)).toBeInTheDocument();
+    expect(screen.queryByText(/所有功能可用|All features are available/)).not.toBeInTheDocument();
+  });
+
+  it('renders host-agent AI+ as a neutral disconnected capability state', () => {
+    renderHealthCenter();
+
+    const card = screen.getByTestId('ai-plus-status-card');
+    expect(card).toHaveTextContent('星轨 AI+ 连接');
+    expect(card).toHaveTextContent('未连接');
+    expect(card).toHaveTextContent('智能元数据');
+    expect(card).toHaveTextContent('智能搜索');
+    expect(within(card).getByRole('link', { name: /如何连接宿主 agent/i })).toHaveAttribute('href', '/maintenance/host-agent');
+  });
+
+  it('renders host-agent AI+ as connected from the shared capability state', () => {
+    mockUseHostAgentCapability.mockReturnValue(hostAgentOnline);
+
+    renderHealthCenter();
+
+    const card = screen.getByTestId('ai-plus-status-card');
+    expect(card).toHaveTextContent('星轨 AI+ 连接');
+    expect(card).toHaveTextContent('已连接');
+  });
+
+  it('does not show an unqualified healthy headline when index diagnostics need attention', () => {
+    mockUseIndexCheck.mockReturnValue(indexCheckWarning);
+    mockUseIndexVerify.mockReturnValue(indexVerifyWarning);
+    mockUseIndexCacheDryRun.mockReturnValue(cacheDryRunWarning);
+
+    renderHealthCenter();
+
+    expect(screen.getByTestId('index-health-state').textContent).toContain('需要关注');
+    expect(screen.getByTestId('health-status-title').textContent).toContain('需要关注');
+    expect(screen.getByTestId('health-status-title').textContent).not.toContain('一切正常');
   });
 
   it('renders degraded state with warning icon and warnings list', () => {
@@ -356,6 +482,10 @@ describe('HealthCenter', () => {
   });
 
   it('renders index diagnostics from CLI-mediated payloads', () => {
+    mockUseIndexCheck.mockReturnValue(indexCheckWarning);
+    mockUseIndexVerify.mockReturnValue(indexVerifyWarning);
+    mockUseIndexCacheDryRun.mockReturnValue(cacheDryRunWarning);
+
     renderHealthCenter();
 
     expect(screen.getByTestId('index-diagnostics-card')).toBeInTheDocument();

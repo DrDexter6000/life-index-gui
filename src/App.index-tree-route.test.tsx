@@ -9,9 +9,18 @@ const IndexTreeDiagnosticsMock = () => (
   <div data-testid="index-tree-diagnostics-route-mock">Index Tree Diagnostics Route</div>
 );
 
+const HostAgentGuideMock = () => (
+  <div data-testid="host-agent-guide-route-mock">Host Agent Guide Route</div>
+);
+
 vi.mock('@/app/routes/IndexTreeDiagnostics', () => ({
   __esModule: true,
   default: IndexTreeDiagnosticsMock,
+}));
+
+vi.mock('@/app/routes/HostAgentGuide', () => ({
+  __esModule: true,
+  default: HostAgentGuideMock,
 }));
 
 vi.mock('@/app/routes/Recall', () => ({
@@ -67,13 +76,13 @@ vi.mock('react-router', async () => {
   };
 });
 
-function renderAppAtIndexTreeRoute() {
+function renderAppAtRoute(route: string) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/maintenance/index-tree']}>
+      <MemoryRouter initialEntries={[route]}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -82,10 +91,20 @@ function renderAppAtIndexTreeRoute() {
 
 describe('/maintenance/index-tree route registration', () => {
   it('renders the IndexTreeDiagnostics component at /maintenance/index-tree', async () => {
-    renderAppAtIndexTreeRoute();
+    renderAppAtRoute('/maintenance/index-tree');
 
     await waitFor(() => {
       expect(screen.getByTestId('index-tree-diagnostics-route-mock')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('/maintenance/host-agent route registration', () => {
+  it('renders the host-agent connection guide at /maintenance/host-agent', async () => {
+    renderAppAtRoute('/maintenance/host-agent');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('host-agent-guide-route-mock')).toBeInTheDocument();
     });
   });
 });

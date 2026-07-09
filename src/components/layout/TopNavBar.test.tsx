@@ -36,9 +36,19 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@/hooks/useHostAgent', () => ({
-  useHostAgentHealth: () => mocks.hostAgentHealth,
-}));
+vi.mock('@/hooks/useHostAgent', async () => {
+  const { getHostAgentCapability } = await vi.importActual<typeof import('@/lib/health-status')>('@/lib/health-status');
+  return {
+    useHostAgentHealth: () => mocks.hostAgentHealth,
+    useHostAgentCapability: () => getHostAgentCapability(
+      mocks.hostAgentHealth.data as Parameters<typeof getHostAgentCapability>[0],
+      {
+        isLoading: mocks.hostAgentHealth.isLoading,
+        isError: mocks.hostAgentHealth.isError,
+      },
+    ),
+  };
+});
 
 vi.mock('@/lib/api-client', () => ({
   publicLinkAPI: mocks.publicLinkAPI,
@@ -438,7 +448,7 @@ describe('TopNavBar', () => {
       const console = await screen.findByTestId('starweave-console');
       expect(within(console).getByText(/离线 OFFLINE|OFFLINE/i)).toBeInTheDocument();
       expect(within(console).getByText(/未检测到宿主 agent|No host agent detected/i)).toBeInTheDocument();
-      expect(within(console).getByRole('link', { name: /如何连接宿主 agent|How to connect a host agent/i })).toBeInTheDocument();
+      expect(within(console).getByRole('link', { name: /如何连接宿主 agent|How to connect a host agent/i })).toHaveAttribute('href', '/maintenance/host-agent');
       fireEvent.click(within(console).getByRole('button', { name: /公网链接|public link/i }));
 
       expect(await screen.findByRole('dialog', { name: /公开链接|public link/i })).toBeInTheDocument();
