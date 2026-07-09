@@ -345,7 +345,9 @@ describe('IndexDiagnostics', () => {
     fireEvent.click(screen.getByTestId('postcheck-button'));
 
     await waitFor(() => expect(mockMaintenanceAuditRefetch).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('后验检查未再发现该问题')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('后验检查未再发现该问题')).toBeInTheDocument();
+    });
   });
 
   it('does not expose direct rebuild controls on the repair surface', () => {

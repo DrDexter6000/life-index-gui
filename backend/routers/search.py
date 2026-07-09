@@ -192,6 +192,9 @@ def _build_meta(data: dict, command_args: list[str]) -> dict:
         events = data.get("events")
         if events is not None:
             meta["events"] = events
+        entity_expansion = data.get("entity_expansion")
+        if entity_expansion is not None:
+            meta["entityExpansion"] = entity_expansion
         mode = data.get("smart_search_mode")
         if mode is not None:
             meta["smartSearchMode"] = mode

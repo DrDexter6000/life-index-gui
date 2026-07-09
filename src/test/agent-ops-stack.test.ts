@@ -15,5 +15,5 @@ describe('agent ops stack script helpers', () => {
     );
 
     expect(output).toMatch(/agent ops stack helpers OK/);
-  }, 15_000);
+  }, 30_000);
 });

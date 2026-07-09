@@ -95,7 +95,7 @@ def test_review_entities_calls_cli_review():
     assert payload["ok"] is True
     assert payload["data"]["total"] == 1
     assert payload["data"]["queue"][0]["item_id"] == "review-1"
-    assert mock_adapter.run_json.call_args[0][0] == ["entity", "--review"]
+    assert mock_adapter.run_json.call_args[0][0] == ["entity", "--review", "--json"]
 
 
 def test_audit_entities_calls_cli_audit():
@@ -142,6 +142,155 @@ def test_candidate_edges_caps_large_cli_output():
     assert payload["data"]["total"] == 3
     assert len(payload["data"]["candidates"]) == 2
     assert mock_adapter.run_json.call_args[0][0] == ["entity", "--candidate-edges"]
+
+
+def test_get_entity_profile_by_id_calls_cli_profile_and_preserves_payload():
+    """GET /api/entities/profile?id=... consumes CLI entity profile JSON."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(
+        return_value={
+            "success": True,
+            "schema_version": "v1.1.1",
+            "provenance": {"generator": "entity"},
+            "data": {
+                "identity": {
+                    "entity_id": "actor-alice",
+                    "primary_name": "Alice",
+                    "aliases": ["Ally"],
+                    "type": "actor",
+                    "kind": "human",
+                    "status": "confirmed",
+                    "is_self": True,
+                },
+                "relationships": [
+                    {
+                        "target": "actor-bob",
+                        "target_name": "Bob",
+                        "relation": "friend_of",
+                        "source": "user",
+                        "status": "confirmed",
+                        "evidence": ["Journals/2026/03/life-index_2026-03-15_001.md"],
+                    }
+                ],
+                "mentions": [
+                    {
+                        "rel_path": "Journals/2026/03/life-index_2026-03-15_001.md",
+                        "date": "2026-03-15",
+                        "title": "Primary Mention",
+                    }
+                ],
+                "evidence": ["Journals/2026/03/life-index_2026-03-15_001.md"],
+                "stats": {
+                    "first_mention": "2026-03-15",
+                    "latest_mention": "2026-03-15",
+                    "mention_count": 1,
+                    "relationship_count": 1,
+                },
+            },
+        }
+    )
+
+    with patch("backend.routers.entities.CLIAdapter", return_value=mock_adapter):
+        response = client.get("/api/entities/profile?id=actor-alice")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["data"]["identity"]["entity_id"] == "actor-alice"
+    assert payload["data"]["relationships"][0]["status"] == "confirmed"
+    assert payload["data"]["mentions"][0]["rel_path"].startswith("Journals/")
+    assert payload["data"]["schemaVersion"] == "v1.1.1"
+    assert payload["data"]["provenance"]["generator"] == "entity"
+    assert mock_adapter.run_json.call_args[0][0] == [
+        "entity",
+        "profile",
+        "--id",
+        "actor-alice",
+        "--json",
+    ]
+
+
+def test_get_entity_profile_by_name_calls_cli_profile_name_selector():
+    """GET /api/entities/profile?name=... preserves the CLI name selector."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(
+        return_value={
+            "success": True,
+            "data": {
+                "identity": {
+                    "entity_id": "actor-alice",
+                    "primary_name": "Alice",
+                    "aliases": ["Ally"],
+                    "type": "actor",
+                    "kind": "human",
+                    "status": "confirmed",
+                    "is_self": False,
+                },
+                "relationships": [],
+                "mentions": [],
+                "evidence": [],
+                "stats": {"mention_count": 0, "relationship_count": 0},
+            },
+        }
+    )
+
+    with patch("backend.routers.entities.CLIAdapter", return_value=mock_adapter):
+        response = client.get("/api/entities/profile?name=Ally")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert mock_adapter.run_json.call_args[0][0] == [
+        "entity",
+        "profile",
+        "--name",
+        "Ally",
+        "--json",
+    ]
+
+
+def test_get_entity_profile_requires_exactly_one_selector():
+    """Profile endpoint fails closed unless exactly one selector is present."""
+    response = client.get("/api/entities/profile")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "VALIDATION_ERROR"
+
+    response = client.get("/api/entities/profile?id=actor-alice&name=Alice")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_get_entity_profile_candidate_fails_closed_with_review_details():
+    """Candidate entities must not render as confirmed GUI profiles."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(
+        return_value={
+            "success": False,
+            "data": {
+                "entity_id": "actor-morgan",
+                "status": "candidate",
+                "suggested_command": "life-index entity --review",
+            },
+            "error": {
+                "code": "ENTITY_PROFILE_CANDIDATE",
+                "message": "candidate entities do not have confirmed profiles",
+            },
+        }
+    )
+
+    with patch("backend.routers.entities.CLIAdapter", return_value=mock_adapter):
+        response = client.get("/api/entities/profile?id=actor-morgan")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "ENTITY_PROFILE_CANDIDATE"
+    assert payload["error"]["details"]["suggested_command"] == "life-index entity --review"
 
 
 def test_preview_delete_uses_cli_preview_without_serialized_mutation():
@@ -250,10 +399,63 @@ def test_preview_merge_uses_review_preview_surface():
         "--review",
         "--action",
         "preview",
+        "--review-action",
+        "merge_as_alias",
         "--id",
+        "person-b",
+        "--source-id",
         "person-b",
         "--target-id",
         "person-a",
+        "--json",
+    ]
+
+
+def test_preview_review_action_uses_structured_contract_args():
+    """Review action previews consume the CLI #155 structured action contract."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(
+        return_value={
+            "success": True,
+            "data": {
+                "item_id": "review-1",
+                "action": "keep_separate",
+                "preview": True,
+                "will_write": [{"type": "not_duplicate_of"}],
+            },
+            "schema_version": "v1.4.1",
+        }
+    )
+
+    with patch("backend.routers.entities.CLIAdapter", return_value=mock_adapter):
+        response = client.post(
+            "/api/entities/mutations/preview",
+            json={
+                "operation": "keep_separate",
+                "reviewItemId": "review-1",
+                "sourceId": "person-b",
+                "targetId": "person-a",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["data"]["preview"]["action"] == "keep_separate"
+    assert mock_adapter.run_json.call_args[0][0] == [
+        "entity",
+        "--review",
+        "--action",
+        "preview",
+        "--review-action",
+        "keep_separate",
+        "--id",
+        "review-1",
+        "--source-id",
+        "person-b",
+        "--target-id",
+        "person-a",
+        "--json",
     ]
 
 
@@ -413,10 +615,94 @@ def test_confirm_merge_uses_cli_merge_and_post_check():
         "merge_as_alias",
         "--id",
         "person-b",
+        "--source-id",
+        "person-b",
         "--target-id",
         "person-a",
+        "--json",
     ]
     assert mock_adapter.run_json.call_args[0][0] == ["entity", "--check"]
+
+
+def test_confirm_review_action_uses_structured_contract_args_and_post_check():
+    """Review action apply uses the same serialized mutation path as existing mutations."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_serialized = AsyncMock(
+        return_value=json.dumps(
+            {
+                "success": True,
+                "data": {
+                    "item_id": "review-2",
+                    "action": "reject_candidate",
+                    "applied": True,
+                    "source_id": "candidate-a",
+                },
+                "schema_version": "v1.4.1",
+            }
+        )
+    )
+    mock_adapter.run_json = AsyncMock(
+        return_value={"success": True, "data": {"total_entities": 3, "issues": []}}
+    )
+
+    with patch("backend.routers.entities.CLIAdapter", return_value=mock_adapter):
+        response = client.post(
+            "/api/entities/mutations/confirm",
+            json={
+                "operation": "reject_candidate",
+                "reviewItemId": "review-2",
+                "sourceId": "candidate-a",
+                "previewAccepted": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["data"]["mutation"]["action"] == "reject_candidate"
+    assert mock_adapter.run_serialized.call_args[0][0] == [
+        "entity",
+        "--review",
+        "--action",
+        "reject_candidate",
+        "--id",
+        "review-2",
+        "--source-id",
+        "candidate-a",
+        "--json",
+    ]
+    assert mock_adapter.run_json.call_args[0][0] == ["entity", "--check"]
+
+
+def test_preview_review_action_passthroughs_cli_error_details():
+    """Review action preview failures remain fail-closed and preserve CLI details."""
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(
+        return_value={
+            "success": False,
+            "error": {
+                "code": "ENTITY_REVIEW_ACTION_INVALID",
+                "message": "review action is not available for this item",
+            },
+            "data": {"item_id": "review-9", "action": "confirm_candidate"},
+        }
+    )
+
+    with patch("backend.routers.entities.CLIAdapter", return_value=mock_adapter):
+        response = client.post(
+            "/api/entities/mutations/preview",
+            json={
+                "operation": "confirm_candidate",
+                "reviewItemId": "review-9",
+                "sourceId": "candidate-a",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "ENTITY_REVIEW_ACTION_INVALID"
+    assert payload["error"]["details"]["item_id"] == "review-9"
 
 
 def test_add_alias_mutation_is_rejected_until_cli_preview_contract_exists():

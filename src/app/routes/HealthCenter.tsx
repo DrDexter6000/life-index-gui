@@ -43,6 +43,49 @@ const STATUS_COLOR: Record<HealthState, string> = {
 };
 
 const INDEX_REPAIR_CAPABILITY = 'CLI-REQ-2026-05-28-006';
+const ENTITY_PROFILES_REBUILD_COMMAND = 'life-index abstract --entities';
+
+type EntityProfilesStaleHint = {
+  message?: string;
+  command: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function hasEntityProfilesStaleName(record: Record<string, unknown>): boolean {
+  return ['type', 'name', 'check', 'id'].some((key) => stringField(record, key) === 'entity_profiles_stale');
+}
+
+function extractEntityProfilesStaleHint(data: HealthResponse | undefined): EntityProfilesStaleHint | null {
+  const health = data?.health;
+  if (!isRecord(health)) return null;
+  const nestedData = isRecord(health.data) ? health.data : null;
+  const groups = [health.events, health.checks, nestedData?.events, nestedData?.checks];
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const item of group) {
+      if (!isRecord(item) || !hasEntityProfilesStaleName(item)) continue;
+      const command = stringField(item, 'suggested_command')
+        ?? stringField(item, 'command')
+        ?? (stringField(item, 'hint')?.includes(ENTITY_PROFILES_REBUILD_COMMAND)
+          ? ENTITY_PROFILES_REBUILD_COMMAND
+          : undefined)
+        ?? ENTITY_PROFILES_REBUILD_COMMAND;
+      return {
+        command,
+        message: stringField(item, 'message') ?? stringField(item, 'reason') ?? stringField(item, 'hint'),
+      };
+    }
+  }
+  return null;
+}
 
 /**
  * HealthCenter — user-facing maintenance/health diagnostics surface.
@@ -95,6 +138,7 @@ export default function HealthCenter() {
 
   const auditAnomalyCount = auditData?.data?.anomalies?.length ?? 0;
   const auditHasAnomalies = auditData?.success === true && auditAnomalyCount > 0;
+  const entityProfilesStaleHint = extractEntityProfilesStaleHint(healthData);
 
   return (
     <>
@@ -162,6 +206,24 @@ export default function HealthCenter() {
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {entityProfilesStaleHint && (
+          <div
+            className="mt-4 rounded-2xl border border-white/[0.08] bg-[var(--color-ether-surface-ghost)] p-4"
+            data-testid="entity-profiles-stale-hint"
+          >
+            <div className="mb-2 flex items-center gap-2 text-sm font-medium text-[var(--color-amber)]">
+              <span className="material-symbols-outlined text-base">info</span>
+              {t('entityProfilesStaleTitle')}
+            </div>
+            <p className="mb-3 text-sm text-[var(--color-secondary)]">
+              {entityProfilesStaleHint.message ?? t('entityProfilesStaleDesc')}
+            </p>
+            <code className="block rounded-lg border border-white/[0.08] px-3 py-2 text-xs text-[var(--color-primary)]">
+              {entityProfilesStaleHint.command}
+            </code>
           </div>
         )}
       </GlassCard>

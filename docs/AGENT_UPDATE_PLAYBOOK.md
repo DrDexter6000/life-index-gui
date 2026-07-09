@@ -4,7 +4,9 @@ This playbook is for a host agent updating a local Life Index stack. The CLI ser
 
 ## Order
 
-Run the CLI update first, then the GUI update, then the stack verification.
+Run the CLI update first, then the GUI upgrade atom. The GUI atom performs the
+safe GUI dependency recovery sequence and runs stack verification before it
+reports a successful apply.
 
 ## 1. Update Life Index CLI
 
@@ -26,6 +28,28 @@ try to upgrade over a dirty tree.
 
 Operations discipline: Never commit or push from an operations clone. Keep the clone at zero local changes. Write friction notes and operational notes to the Life Index data directory, not inside the cloned repository.
 
+Host agents can first inspect the GUI checkout with the GUI upgrade atom:
+
+```bash
+npm run gui-upgrade:plan -- --json
+npm run gui-upgrade:apply -- --json
+```
+
+The current GUI upgrade atom emits `gui.upgrade.v0` JSON for planning and
+fail-closed apply checks. It covers git freshness/fast-forward, Node
+devDependencies, `NODE_ENV` / npm omit guards, and Python backend dependency
+preflight/install. It also checks the installed Life Index CLI dependency and
+feature gates, including review cards requiring CLI `1.4.4+`. After all safe
+dependency and git actions are complete, apply runs `npm run verify-stack` and
+reports the verification result in JSON. It still does not run public sync,
+tags, releases, or CLI upgrade writes.
+
+If the GUI atom reports `resolve_cli_dependency`, stop the GUI update and fix
+the CLI first through the CLI-owned upgrade flow, for example
+`life-index upgrade --plan --json`, or by manually upgrading the CLI install.
+Then rerun the GUI atom. The GUI atom must not call `life-index upgrade --apply`
+or install/upgrade the CLI itself.
+
 ```bash
 cd /path/to/life-index-gui
 git status --porcelain
@@ -33,6 +57,7 @@ git pull --ff-only
 python --version
 python3.13 -m venv .venv  # if the active Python is outside 3.11-3.13
 source .venv/bin/activate # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -r backend/requirements.txt
 echo $NODE_ENV
 unset NODE_ENV             # if it printed production
 npm ci --include=dev
@@ -51,6 +76,8 @@ If `npm ci --include=dev` finishes but critical devDependencies are still missin
 ```bash
 pnpm install && pnpm run build
 ```
+
+Troubleshooting: if GUI dev, test, build, or verify commands report missing devDependencies or module-not-found errors, check `NODE_ENV` first and do not run development validation under `NODE_ENV=production`.
 
 If `pnpm` is not installed yet:
 
@@ -72,13 +99,21 @@ The version authority is the backend JSON payload:
 - `repo_version`: CLI repository/version marker surfaced by `life-index version`
 - `compatible`: whether the detected CLI package version satisfies the GUI minimum
 
+GUI entity review cards are a feature-level gate on top of the baseline
+compatibility check. They require CLI `1.4.4+` because they consume the structured
+review action contract.
+
 `/api/version` is the concise compatibility surface for agents. `/api/health` carries the same version fields plus detailed CLI health diagnostics for the human-facing GUI.
 
-## 3. Verify the local stack
+## 3. Verify the local stack manually
 
 ```bash
 npm run verify-stack
 ```
+
+This is the fallback when running manual recovery steps outside
+`npm run gui-upgrade:apply -- --json`, or when an operator wants to re-run the
+same verification after the atom has already succeeded.
 
 Expected behavior:
 

@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { resolvePythonCommand } from './python-interpreter.mjs';
+import { checkDevEnvironment } from './require-dev-env.mjs';
 
 export const DEFAULT_BACKEND_PORT = 8000;
 export const DEFAULT_FRONTEND_PORT = 5173;
@@ -121,7 +122,21 @@ export function createLaunchCommands({
 export function preflightVerifyStackDevDependencies({
   repoRoot = moduleRepoRoot,
   required = ['vite'],
+  env = process.env,
+  command = 'npm run verify-stack',
 } = {}) {
+  const guard = checkDevEnvironment({ env, command });
+  if (!guard.ok) {
+    return {
+      ok: false,
+      missing: [],
+      error: {
+        code: 'VERIFY_STACK_NODE_ENV_PRODUCTION',
+        message: guard.error.message,
+      },
+    };
+  }
+
   const root = resolve(repoRoot);
   const packageJsonPath = join(root, 'package.json');
   const requireFromRepo = createRequire(packageJsonPath);
@@ -494,18 +509,18 @@ export async function runVerifyStack({
       result.warnings.push(worktreeStatus.warning);
     }
 
+    const preflight = preflightVerifyStackDevDependencies({ repoRoot: root });
+    result.steps.push({ name: 'dev-dependencies', ...preflight });
+    if (!preflight.ok) {
+      result.error = preflight.error;
+      return result;
+    }
+
     const launch = createLaunchCommands({ repoRoot: root, backendPort, frontendPort });
     const pythonPreflight = await preflightBackendPythonVersion({ pythonCommand: launch.backend.command });
     result.steps.push({ name: 'backend-python', ...pythonPreflight });
     if (!pythonPreflight.ok) {
       result.error = pythonPreflight.error;
-      return result;
-    }
-
-    const preflight = preflightVerifyStackDevDependencies({ repoRoot: root });
-    result.steps.push({ name: 'dev-dependencies', ...preflight });
-    if (!preflight.ok) {
-      result.error = preflight.error;
       return result;
     }
 

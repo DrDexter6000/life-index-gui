@@ -17,11 +17,24 @@ class EntityMutationRequest(BaseModel):
 
     operation: str
     entity_id: str | None = Field(None, alias="entityId")
+    review_item_id: str | None = Field(None, alias="reviewItemId")
     source_id: str | None = Field(None, alias="sourceId")
     target_id: str | None = Field(None, alias="targetId")
+    relation: str | None = None
     preview_accepted: bool = Field(False, alias="previewAccepted")
 
     model_config = {"populate_by_name": True}
+
+
+REVIEW_ACTIONS = {
+    "merge_as_alias",
+    "keep_separate",
+    "undo_keep_separate",
+    "add_relationship",
+    "confirm_candidate",
+    "reject_candidate",
+    "skip",
+}
 
 
 @router.get("/entities/stats")
@@ -50,7 +63,7 @@ async def check_entities() -> APIResponse[dict]:
 @router.get("/entities/review")
 async def review_entities() -> APIResponse[dict]:
     """Return entity graph review queue."""
-    return await _entity_data(["entity", "--review"])
+    return await _entity_data(["entity", "--review", "--json"])
 
 
 @router.get("/entities/audit")
@@ -74,6 +87,49 @@ async def candidate_edges(
             {
                 "candidates": candidate_list[:limit],
                 "total": _int_value(data.get("total"), len(candidate_list)),
+                "schemaVersion": data.get("schema_version"),
+                "provenance": data.get("provenance"),
+            }
+        )
+    except CLIError as e:
+        code, msg = map_cli_error(e.stderr, e.returncode)
+        return APIResponse.error_response(code, msg)
+
+
+@router.get("/entities/profile")
+async def get_entity_profile(
+    entity_id: str | None = Query(default=None, alias="id"),
+    name: str | None = Query(default=None),
+) -> APIResponse[dict]:
+    """Return a confirmed entity profile assembled by the CLI."""
+    if bool(entity_id) == bool(name):
+        return APIResponse.error_response(
+            "VALIDATION_ERROR",
+            "entity profile requires exactly one of id or name",
+        )
+
+    args = ["entity", "profile"]
+    if entity_id:
+        args.extend(["--id", entity_id])
+    else:
+        args.extend(["--name", str(name)])
+    args.append("--json")
+
+    cli = CLIAdapter()
+    try:
+        payload = await cli.run_json(args, timeout=30.0)
+        data = _as_dict(payload)
+        if data.get("success") is False:
+            return _entity_error_response(
+                data,
+                "ENTITY_PROFILE_FAILED",
+                "Entity profile command failed",
+            )
+
+        profile = _as_dict(_unwrap_entity_payload(data))
+        return APIResponse.success(
+            {
+                **profile,
                 "schemaVersion": data.get("schema_version"),
                 "provenance": data.get("provenance"),
             }
@@ -199,10 +255,10 @@ def _validate_mutation_request(
     require_preview: bool = False,
 ) -> APIResponse | None:
     """Validate mutation request against the current CLI preview contract."""
-    if body.operation not in {"delete", "merge_as_alias"}:
+    if body.operation not in {"delete", *REVIEW_ACTIONS}:
         return APIResponse.error_response(
             "UNSUPPORTED_ENTITY_MUTATION",
-            "Only delete and merge_as_alias are exposed until the CLI provides preview support for other entity mutations",
+            "Only delete and structured CLI review actions are exposed",
         )
 
     if require_preview and not body.preview_accepted:
@@ -216,14 +272,31 @@ def _validate_mutation_request(
             "VALIDATION_ERROR", "delete requires entityId"
         )
 
-    if body.operation == "merge_as_alias":
+    if body.operation in REVIEW_ACTIONS:
+        if not _review_item_id(body):
+            return APIResponse.error_response(
+                "VALIDATION_ERROR", "review actions require reviewItemId or sourceId"
+            )
+        if not body.source_id:
+            return APIResponse.error_response(
+                "VALIDATION_ERROR", "review actions require sourceId"
+            )
+
+    if body.operation in {"merge_as_alias", "keep_separate", "undo_keep_separate"}:
         if not body.source_id or not body.target_id:
             return APIResponse.error_response(
-                "VALIDATION_ERROR", "merge_as_alias requires sourceId and targetId"
+                "VALIDATION_ERROR", f"{body.operation} requires sourceId and targetId"
             )
         if body.source_id == body.target_id:
             return APIResponse.error_response(
                 "VALIDATION_ERROR", "sourceId and targetId must be different"
+            )
+
+    if body.operation == "add_relationship":
+        if not body.target_id or not body.relation:
+            return APIResponse.error_response(
+                "VALIDATION_ERROR",
+                "add_relationship requires sourceId, targetId, and relation",
             )
 
     return None
@@ -240,16 +313,19 @@ def _mutation_preview_args(body: EntityMutationRequest) -> list[str]:
             "--preview",
             "--json",
         ]
-    return [
+    args = [
         "entity",
         "--review",
         "--action",
         "preview",
+        "--review-action",
+        body.operation,
         "--id",
-        str(body.source_id),
-        "--target-id",
-        str(body.target_id),
+        _review_item_id(body),
     ]
+    _append_review_action_args(args, body)
+    args.append("--json")
+    return args
 
 
 def _mutation_confirm_args(body: EntityMutationRequest) -> list[str]:
@@ -264,16 +340,30 @@ def _mutation_confirm_args(body: EntityMutationRequest) -> list[str]:
             "--backup",
             "--json",
         ]
-    return [
+    args = [
         "entity",
         "--review",
         "--action",
-        "merge_as_alias",
+        body.operation,
         "--id",
-        str(body.source_id),
-        "--target-id",
-        str(body.target_id),
+        _review_item_id(body),
     ]
+    _append_review_action_args(args, body)
+    args.append("--json")
+    return args
+
+
+def _review_item_id(body: EntityMutationRequest) -> str:
+    return str(body.review_item_id or body.source_id or "")
+
+
+def _append_review_action_args(args: list[str], body: EntityMutationRequest) -> None:
+    if body.source_id:
+        args.extend(["--source-id", str(body.source_id)])
+    if body.target_id:
+        args.extend(["--target-id", str(body.target_id)])
+    if body.relation:
+        args.extend(["--relation", str(body.relation)])
 
 
 def _parse_cli_json_stdout(stdout: str) -> dict:
@@ -297,9 +387,11 @@ def _entity_error_response(
     fallback_message: str,
 ) -> APIResponse:
     error = payload.get("error")
+    details = payload.get("data") if isinstance(payload.get("data"), dict) else None
     if isinstance(error, dict):
         return APIResponse.error_response(
             str(error.get("code") or code),
             str(error.get("message") or fallback_message),
+            details=details,
         )
-    return APIResponse.error_response(code, str(error or fallback_message))
+    return APIResponse.error_response(code, str(error or fallback_message), details=details)

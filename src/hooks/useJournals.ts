@@ -200,6 +200,7 @@ export function useDeleteJournal() {
 
 export const healthKeys = {
   check: () => ['health', 'check'] as const,
+  version: () => ['health', 'version'] as const,
   dataAudit: () => ['health', 'data-audit'] as const,
 };
 
@@ -214,6 +215,7 @@ export const entityKeys = {
   all: ['entities'] as const,
   stats: () => [...entityKeys.all, 'stats'] as const,
   list: (type?: string) => [...entityKeys.all, 'list', type] as const,
+  profile: (id?: string) => [...entityKeys.all, 'profile', id] as const,
   check: () => [...entityKeys.all, 'check'] as const,
   audit: () => [...entityKeys.all, 'audit'] as const,
   review: () => [...entityKeys.all, 'review'] as const,
@@ -240,6 +242,18 @@ export function useHealthCheck() {
       }
     },
     staleTime: 30 * 1000,
+    retry: 1,
+  });
+}
+
+/**
+ * Hook for fetching GUI/CLI version compatibility metadata.
+ */
+export function useVersionCheck() {
+  return useQuery({
+    queryKey: healthKeys.version(),
+    queryFn: () => healthAPI.getVersion(),
+    staleTime: 60 * 1000,
     retry: 1,
   });
 }
@@ -362,6 +376,19 @@ export function useEntityCandidateEdges(limit?: number) {
   return useQuery({
     queryKey: entityKeys.candidateEdges(limit),
     queryFn: () => entityAPI.getCandidateEdges(limit),
+    staleTime: 60 * 1000,
+    retry: 1,
+  });
+}
+
+/**
+ * Hook for fetching a confirmed entity profile by stable id.
+ */
+export function useEntityProfile(id?: string) {
+  return useQuery({
+    queryKey: entityKeys.profile(id),
+    queryFn: () => entityAPI.getProfile({ id: id ?? '' }),
+    enabled: Boolean(id),
     staleTime: 60 * 1000,
     retry: 1,
   });

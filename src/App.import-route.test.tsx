@@ -41,6 +41,10 @@ vi.mock('@/app/routes/EntityGraph', () => ({
   __esModule: true,
   default: () => <div>EntityGraph</div>,
 }));
+vi.mock('@/app/routes/EntityProfile', () => ({
+  __esModule: true,
+  default: () => <div>EntityProfile</div>,
+}));
 vi.mock('@/app/routes/IndexDiagnostics', () => ({
   __esModule: true,
   default: () => <div>IndexDiagnostics</div>,

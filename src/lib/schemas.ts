@@ -81,12 +81,31 @@ export const HeatmapDaySchema = z.object({
 
 // ── Search schema ──────────────────────────────────────────────────────────
 
+const EntityExpansionTargetsSchema = z.union([
+  z.array(z.string()),
+  z.string().transform((value) => [value]),
+]);
+
+export const EntityExpansionEntrySchema = z.object({
+  from: z.string().optional(),
+  to: EntityExpansionTargetsSchema.optional(),
+  via: z.string().optional(),
+  entity_id: z.string().optional(),
+  primary_name: z.string().optional(),
+}).passthrough();
+
+export const EntityExpansionSchema = z.object({
+  applied: z.boolean().optional(),
+  expansions: z.array(EntityExpansionEntrySchema).default([]),
+}).passthrough();
+
 export const RawSearchResponseSchema = z.object({
   results: z.array(z.record(z.string(), z.unknown())).optional(),
   l2_results: z.array(z.record(z.string(), z.unknown())).optional(),
   l1_results: z.array(z.record(z.string(), z.unknown())).optional(),
   total: z.number().optional(),
   total_found: z.number().optional(),
+  entity_expansion: EntityExpansionSchema.optional(),
   meta: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -118,6 +137,14 @@ export const HealthCheckSchema = z.object({
     .nullable()
     .optional(),
 });
+
+export const VersionCheckSchema = z.object({
+  gui_version: z.string().optional(),
+  cli_minimum_version: z.string().optional(),
+  repo_version: z.string().nullable().optional(),
+  cli_package_version: z.string().nullable().optional(),
+  compatible: z.boolean().optional(),
+}).passthrough();
 
 export const DataAuditSchema = z.object({
   success: z.boolean(),
@@ -533,6 +560,52 @@ export const CandidateEdgesResponseSchema = z.object({
 });
 
 export const EntityCandidateEdgesSchema = CandidateEdgesResponseSchema;
+
+export const EntityProfileIdentitySchema = z.object({
+  entity_id: z.string(),
+  primary_name: z.string(),
+  aliases: z.array(z.string()).default([]),
+  type: z.string(),
+  kind: z.string().nullable().optional(),
+  status: z.string().default('confirmed'),
+  is_self: z.boolean().default(false),
+}).passthrough();
+
+export const EntityProfileRelationshipSchema = z.object({
+  target: z.string(),
+  target_name: z.string().optional(),
+  relation: z.string().optional(),
+  source: z.string().optional(),
+  created_at: z.string().nullable().optional(),
+  status: z.string().default('confirmed'),
+  evidence: z.array(z.string()).default([]),
+}).passthrough();
+
+export const EntityProfileMentionSchema = z.object({
+  rel_path: z.string(),
+  date: z.string().optional(),
+  title: z.string().optional(),
+}).passthrough();
+
+export const EntityProfileStatsSchema = z.object({
+  first_mention: z.string().nullable().optional(),
+  latest_mention: z.string().nullable().optional(),
+  mention_count: z.number().default(0),
+  relationship_count: z.number().default(0),
+}).passthrough();
+
+export const EntityProfileSchema = z.object({
+  identity: EntityProfileIdentitySchema,
+  relationships: z.array(EntityProfileRelationshipSchema).default([]),
+  mentions: z.array(EntityProfileMentionSchema).default([]),
+  evidence: z.array(z.string()).default([]),
+  stats: EntityProfileStatsSchema.default({
+    mention_count: 0,
+    relationship_count: 0,
+  }),
+  schemaVersion: z.string().optional(),
+  provenance: z.unknown().optional(),
+}).passthrough();
 
 // ── Entity mutation schemas (S5 — Guarded Entity Mutation UX) ─────────────
 

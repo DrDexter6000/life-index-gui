@@ -41,6 +41,8 @@
 
 Life Index CLI 是给 Agent 的原生工具层；Life Index GUI 是给人类用户的体验层。CLI 负责可靠的数据与能力边界，GUI 负责把写入、搜索、回看、移动访问和 AI+ 结果呈现成一个可以长期使用的界面。
 
+GUI 也会消费 CLI 的实体图谱回报：搜索可显示实体扩展归因，实体链接可打开档案页，review cards 可预览和确认 CLI-backed 实体维护动作。发布范围见 [CHANGELOG.md](CHANGELOG.md)，本机兼容性以 `/api/version` 为准。
+
 
 <p align="center">
   <img src="public/launch/life-index-gui-poster-quiet-star-ring.png" alt="Life Index GUI 写入与移动界面产品展示图" width="860" />
@@ -150,7 +152,14 @@ npm run build
 
 ## 升级
 
-升级与运维完整步骤见 [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md)。
+宿主 agent 应优先使用 GUI upgrade atom：
+
+```bash
+npm run gui-upgrade:plan
+npm run gui-upgrade:apply
+```
+
+它会以 fail-closed JSON 检查并处理安全的本地 git、Node、Python backend、CLI feature gate 和 `verify-stack` 状态。完整升级与运维步骤见 [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md)。
 
 ## 手机临时访问
 

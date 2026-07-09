@@ -575,3 +575,55 @@ async def test_keyword_search_preserves_cli_totals_and_schema():
     assert payload["meta"]["events"] == [{"type": "keyword_scan"}]
     assert payload["data"]["meta"]["schemaVersion"] == "1.3"
     assert payload["data"]["meta"]["events"] == [{"type": "keyword_scan"}]
+    assert "entityExpansion" not in payload["meta"]
+    assert "entityExpansion" not in payload["data"]["meta"]
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_preserves_entity_expansion_attribution():
+    """POST /api/search exposes CLI 1.4 entity_expansion attribution in meta."""
+    entity_expansion = {
+        "applied": True,
+        "expansions": [
+            {
+                "from": "Ally",
+                "to": ["Alice"],
+                "via": "alias",
+                "entity_id": "actor-alice",
+                "primary_name": "Alice",
+            },
+            {
+                "from": "女儿",
+                "to": ["Alice", "Ally"],
+                "via": "relation",
+                "entity_id": "actor-alice",
+                "primary_name": "Alice",
+            },
+        ],
+    }
+    mock_data = {
+        "merged_results": [
+            {
+                "rel_path": "Journals/2026/04/life-index_2026-04-19_001.md",
+                "date": "2026-04-19",
+                "metadata": {"title": "Entity Result"},
+            },
+        ],
+        "total_matches": 1,
+        "entity_expansion": entity_expansion,
+    }
+
+    mock_adapter = MagicMock()
+    mock_adapter.run_json = AsyncMock(return_value=mock_data)
+
+    with patch("backend.routers.search.CLIAdapter", return_value=mock_adapter):
+        response = client.post(
+            "/api/search",
+            json={"query": "Ally", "level": 3, "limit": 20},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["meta"]["entityExpansion"] == entity_expansion
+    assert payload["data"]["meta"]["entityExpansion"] == entity_expansion

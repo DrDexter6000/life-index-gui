@@ -79,6 +79,49 @@ def test_health_check_exposes_degraded_state():
     assert "stale_index_tree" in payload["data"]["health"]["warnings"]
 
 
+def test_health_check_preserves_entity_profiles_stale_event():
+    """GET /api/health preserves CLI entity profile stale events and commands."""
+    stale_event = {
+        "type": "entity_profiles_stale",
+        "severity": "info",
+        "message": "Entity profile docs are stale.",
+        "suggested_command": "life-index abstract --entities",
+    }
+    stale_check = {
+        "name": "entity_profiles_stale",
+        "status": "warn",
+        "hint": "life-index abstract --entities",
+    }
+    mock_adapter = MagicMock()
+    mock_adapter.handshake = AsyncMock(
+        return_value={
+            "status": "ok",
+            "cli_available": True,
+            "compatible": True,
+            "package_version": "1.4.1",
+            "repo_version": "1.4.1",
+            "health": {
+                "status": "healthy",
+                "events": [stale_event],
+                "checks": [stale_check],
+                "journal_count": 42,
+            },
+        }
+    )
+
+    app.dependency_overrides[health.get_cli] = lambda: mock_adapter
+    try:
+        response = client.get("/api/health")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["data"]["health"]["events"] == [stale_event]
+    assert payload["data"]["health"]["checks"] == [stale_check]
+
+
 def test_health_check_cli_unavailable():
     """GET /api/health returns degraded state when CLI is unreachable.
 

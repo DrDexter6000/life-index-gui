@@ -12,7 +12,12 @@ function LocationProbe() {
 }
 
 const mockJournalSearchReturn = {
-  data: null as { results: Array<Record<string, unknown>>; total: number } | null,
+  data: null as {
+    results: Array<Record<string, unknown>>;
+    total: number;
+    entityExpansion?: Record<string, unknown>;
+    meta?: Record<string, unknown>;
+  } | null,
   isLoading: false,
   isError: false,
   error: null as Error | null,
@@ -100,7 +105,7 @@ function completedTurn(
 
 vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => ({
-    t: (key: string) => {
+    t: (key: string, vars?: Record<string, unknown>) => {
       const map: Record<string, string> = {
         recallSubtitle: 'Search by keyword, date, or mood',
         recallTitleCn: '穿梭至某个时空坐标...',
@@ -140,8 +145,13 @@ vi.mock('@/hooks/useTranslation', () => ({
         hostAgentStreamErrorTitle: 'Stream failed',
         hostAgentStreamErrorBody: 'The Host Agent could not complete this request.',
         hostAgentThinkingToggle: 'Thinking process',
+        entityExpansionTitle: 'Entity graph expansion',
+        entityExpansionAlias: 'Alias: {{from}} -> {{to}}',
+        entityExpansionRelation: 'Relation: {{from}} -> {{to}}',
+        entityExpansionGeneric: 'Entity graph expansion',
+        entityExpansionMore: '+{{count}} more',
       };
-      return map[key] ?? key;
+      return (map[key] ?? key).replace(/\{\{(\w+)\}\}/g, (_match, name) => String(vars?.[name] ?? ''));
     },
     lang: 'en',
   }),
@@ -654,6 +664,57 @@ describe('Recall', () => {
     const cards = results.querySelectorAll('a');
     expect(cards[0]).toHaveAttribute('href', '/journal/newer');
     expect(cards[1]).toHaveAttribute('href', '/journal/older');
+  });
+
+  it('shows entity graph attribution for keyword search alias and relation expansions', () => {
+    mockJournalSearchReturn.data = {
+      results: [
+        { id: 'result', title: 'Entity Result', excerpt: 'e', date: '2026-05-01', topics: [], moods: [] },
+      ],
+      total: 1,
+      entityExpansion: {
+        applied: true,
+        expansions: [
+          { from: 'Ally', to: ['Alice'], via: 'alias', entity_id: 'actor-alice', primary_name: 'Alice' },
+          { from: '女儿', to: ['Alice', 'Ally'], via: 'relation', entity_id: 'actor-alice', primary_name: 'Alice' },
+          { from: 'field-note', to: ['Alice'], via: 'unknown', entity_id: 'actor-alice', primary_name: 'Alice' },
+          { from: 'self', to: ['Alice'], via: 'self', entity_id: 'actor-alice', primary_name: 'Alice' },
+        ],
+      },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/recall?q=Ally']}>
+        <Recall />
+      </MemoryRouter>,
+    );
+
+    const strip = screen.getByTestId('entity-expansion-strip');
+    expect(strip).toHaveTextContent('Entity graph expansion');
+    expect(strip).toHaveTextContent('Alias: Ally -> Alice');
+    expect(strip).toHaveTextContent('Relation: 女儿 -> Alice, Ally');
+    expect(strip).toHaveTextContent('+1 more');
+    expect(screen.getAllByRole('link', { name: /Alice/ })[0]).toHaveAttribute(
+      'href',
+      '/entities/actor-alice',
+    );
+  });
+
+  it('does not show entity graph attribution when keyword search has no expansion', () => {
+    mockJournalSearchReturn.data = {
+      results: [
+        { id: 'result', title: 'Plain Result', excerpt: 'e', date: '2026-05-01', topics: [], moods: [] },
+      ],
+      total: 1,
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/recall?q=plain']}>
+        <Recall />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByTestId('entity-expansion-strip')).not.toBeInTheDocument();
   });
 
   it('does not render legacy gateway or Agent Bridge user-facing language', () => {

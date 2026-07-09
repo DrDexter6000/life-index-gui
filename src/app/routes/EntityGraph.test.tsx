@@ -13,6 +13,7 @@ const mockUseEntityReview = vi.fn();
 const mockUseEntityCandidateEdges = vi.fn();
 const mockUseEntityMutationPreview = vi.fn();
 const mockUseEntityMutationConfirm = vi.fn();
+const mockUseVersionCheck = vi.fn();
 const mockPreviewMutateAsync = vi.fn();
 const mockConfirmMutateAsync = vi.fn();
 const mockInvalidateQueries = vi.fn();
@@ -26,6 +27,7 @@ vi.mock('@/hooks/useJournals', () => ({
   useEntityCandidateEdges: () => mockUseEntityCandidateEdges(),
   useEntityMutationPreview: () => mockUseEntityMutationPreview(),
   useEntityMutationConfirm: () => mockUseEntityMutationConfirm(),
+  useVersionCheck: () => mockUseVersionCheck(),
 }));
 
 vi.mock('@tanstack/react-query', async () => {
@@ -63,8 +65,8 @@ const defaultStats = {
 const defaultList = {
   data: [
     {
-      id: 'person-a',
-      type: 'person',
+      id: 'entity-a',
+      type: 'actor',
       primary_name: '张叁',
       aliases: ['老张'],
       attributes: {},
@@ -93,6 +95,91 @@ const defaultReview = {
   isError: false,
 };
 
+const defaultVersion = {
+  data: {
+    cli_package_version: '1.4.4',
+    cli_minimum_version: '1.3.7',
+    compatible: true,
+  },
+  isLoading: false,
+  isError: false,
+};
+
+const duplicateReviewItem = {
+  item_id: 'review-1',
+  risk_level: 'high',
+  category: 'possible_duplicate',
+  why: 'Alias overlap and nearby journal evidence suggest these may be the same actor.',
+  evidence: ['Journals/2026/03/life-index_2026-03-15_001.md'],
+  source_id: 'entity-b',
+  target_id: 'entity-a',
+  entities: [
+    { entity_id: 'entity-b', primary_name: 'Zhang S.', status: 'candidate' },
+    { entity_id: 'entity-a', primary_name: 'Zhang San', status: 'confirmed' },
+  ],
+  action_choices: [
+    {
+      action: 'merge_as_alias',
+      label: 'Same',
+      description: 'Merge Zhang S. into Zhang San as aliases.',
+      source_id: 'entity-b',
+      target_id: 'entity-a',
+      preview_required: true,
+    },
+    {
+      action: 'keep_separate',
+      label: 'Different',
+      description: 'Mark these entities as not duplicates.',
+      source_id: 'entity-b',
+      target_id: 'entity-a',
+      preview_required: true,
+    },
+    {
+      action: 'skip',
+      label: 'Not-sure',
+      description: 'Leave unchanged for later review.',
+      source_id: 'entity-b',
+      target_id: 'entity-a',
+      preview_required: false,
+    },
+  ],
+};
+
+const candidateReviewItem = {
+  item_id: 'review-2',
+  risk_level: 'low',
+  category: 'candidate_entity',
+  why: 'A repeated entity mention has not been confirmed yet.',
+  evidence: ['Journals/2026/04/life-index_2026-04-02_001.md'],
+  source_id: 'candidate-west',
+  entities: [
+    { entity_id: 'candidate-west', primary_name: 'Western Ridge', status: 'candidate' },
+  ],
+  action_choices: [
+    {
+      action: 'confirm_candidate',
+      label: 'Confirm candidate',
+      description: 'Promote this candidate to confirmed.',
+      source_id: 'candidate-west',
+      preview_required: true,
+    },
+    {
+      action: 'reject_candidate',
+      label: 'Reject candidate',
+      description: 'Remove this candidate from the graph.',
+      source_id: 'candidate-west',
+      preview_required: true,
+    },
+    {
+      action: 'skip',
+      label: 'Not-sure',
+      description: 'Leave unchanged for later review.',
+      source_id: 'candidate-west',
+      preview_required: false,
+    },
+  ],
+};
+
 const defaultCandidateEdges = {
   data: { candidates: [], total: 0 },
   isLoading: false,
@@ -107,6 +194,7 @@ beforeEach(() => {
   mockUseEntityAudit.mockReturnValue(defaultAuditClean);
   mockUseEntityReview.mockReturnValue(defaultReview);
   mockUseEntityCandidateEdges.mockReturnValue(defaultCandidateEdges);
+  mockUseVersionCheck.mockReturnValue(defaultVersion);
   mockUseEntityMutationPreview.mockReturnValue({
     mutateAsync: mockPreviewMutateAsync,
     isPending: false,
@@ -129,14 +217,23 @@ describe('EntityGraph', () => {
   it('renders entity items and type filter buttons', () => {
     renderEntityGraph();
     expect(screen.getByTestId('entity-type-filter')).toBeInTheDocument();
-    expect(screen.getByTestId('entity-row-person-a')).toBeInTheDocument();
+    expect(screen.getByTestId('entity-row-entity-a')).toBeInTheDocument();
+  });
+
+  it('links entity rows to the entity profile page', () => {
+    renderEntityGraph();
+
+    expect(screen.getByRole('link', { name: /张叁/ })).toHaveAttribute(
+      'href',
+      '/entities/entity-a',
+    );
   });
 
   it('changes entity type filter on button click', () => {
     renderEntityGraph();
-    const personBtn = screen.getByTestId('entity-type-person');
-    fireEvent.click(personBtn);
-    // After clicking person, the list hook should be called with 'person'
+    const actorBtn = screen.getByTestId('entity-type-actor');
+    fireEvent.click(actorBtn);
+    // After clicking actor, the list hook should be called with 'actor'
     expect(mockUseEntityList).toHaveBeenCalled();
   });
 
@@ -200,6 +297,186 @@ describe('EntityGraph', () => {
     });
     renderEntityGraph();
     expect(screen.getByTestId('entity-review-item-0')).toBeInTheDocument();
+  });
+
+  it('renders structured review cards with why, evidence, entities, and action choices', () => {
+    mockUseEntityReview.mockReturnValue({
+      data: { queue: [duplicateReviewItem], total: 1 },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderEntityGraph();
+
+    expect(screen.getByTestId('entity-review-card-review-1')).toHaveTextContent(
+      'Alias overlap and nearby journal evidence',
+    );
+    expect(screen.getByText('Journals/2026/03/life-index_2026-03-15_001.md')).toBeInTheDocument();
+    expect(screen.getByText('Zhang S.')).toBeInTheDocument();
+    expect(screen.getByText('candidate')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Same/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Different/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Not-sure/ })).toBeInTheDocument();
+  });
+
+  it('gates review action controls when CLI is older than 1.4.4', () => {
+    mockUseVersionCheck.mockReturnValue({
+      data: {
+        cli_package_version: '1.4.3',
+        cli_minimum_version: '1.3.7',
+        compatible: true,
+      },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseEntityReview.mockReturnValue({
+      data: { queue: [duplicateReviewItem], total: 1 },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderEntityGraph();
+
+    expect(screen.getByTestId('entity-review-card-review-1')).toHaveTextContent(
+      'Alias overlap and nearby journal evidence',
+    );
+    expect(screen.getByTestId('entity-review-version-gate')).toHaveTextContent('1.4.4');
+    expect(screen.queryByRole('button', { name: /Same/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('entity-review-action-review-1-merge_as_alias')).not.toBeInTheDocument();
+  });
+
+  it('keeps review action controls enabled when CLI is 1.4.4', () => {
+    mockUseEntityReview.mockReturnValue({
+      data: { queue: [duplicateReviewItem], total: 1 },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderEntityGraph();
+
+    expect(screen.getByRole('button', { name: /Same/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('entity-review-version-gate')).not.toBeInTheDocument();
+  });
+
+  it('runs Same through preview before enabling apply', async () => {
+    mockUseEntityReview.mockReturnValue({
+      data: { queue: [duplicateReviewItem], total: 1 },
+      isLoading: false,
+      isError: false,
+    });
+    mockPreviewMutateAsync.mockResolvedValue({
+      operation: 'merge_as_alias',
+      preview: { action: 'merge_as_alias', will_write: [{ type: 'merge_as_alias' }] },
+      requiresConfirmation: true,
+    });
+    mockConfirmMutateAsync.mockResolvedValue({
+      operation: 'merge_as_alias',
+      mutation: { action: 'merge_as_alias', applied: true },
+      postCheck: { issues: [] },
+      postCheckOk: true,
+    });
+
+    renderEntityGraph();
+    fireEvent.click(screen.getByRole('button', { name: /Same/ }));
+
+    await waitFor(() => {
+      expect(mockPreviewMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+        operation: 'merge_as_alias',
+        reviewItemId: 'review-1',
+        sourceId: 'entity-b',
+        targetId: 'entity-a',
+      }));
+    });
+    expect(await screen.findByTestId('entity-review-preview-review-1')).toHaveTextContent('merge_as_alias');
+    expect(screen.getByTestId('entity-review-apply-review-1')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('entity-review-preview-accepted-review-1'));
+    fireEvent.click(screen.getByTestId('entity-review-apply-review-1'));
+
+    await waitFor(() => {
+      expect(mockConfirmMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+        operation: 'merge_as_alias',
+        reviewItemId: 'review-1',
+        sourceId: 'entity-b',
+        targetId: 'entity-a',
+      }));
+    });
+    expect(await screen.findByTestId('entity-review-result-review-1')).toHaveTextContent('merge_as_alias');
+  });
+
+  it('maps Different and Not-sure to structured keep_separate and skip actions', async () => {
+    mockUseEntityReview.mockReturnValue({
+      data: { queue: [duplicateReviewItem], total: 1 },
+      isLoading: false,
+      isError: false,
+    });
+    mockPreviewMutateAsync.mockResolvedValue({
+      operation: 'keep_separate',
+      preview: { action: 'keep_separate' },
+      requiresConfirmation: true,
+    });
+
+    renderEntityGraph();
+    fireEvent.click(screen.getByRole('button', { name: /Different/ }));
+    await waitFor(() => {
+      expect(mockPreviewMutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({
+        operation: 'keep_separate',
+        reviewItemId: 'review-1',
+      }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Not-sure/ }));
+    await waitFor(() => {
+      expect(mockPreviewMutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({
+        operation: 'skip',
+        reviewItemId: 'review-1',
+      }));
+    });
+  });
+
+  it('renders candidate review actions without treating candidates as confirmed facts', async () => {
+    mockUseEntityReview.mockReturnValue({
+      data: { queue: [candidateReviewItem], total: 1 },
+      isLoading: false,
+      isError: false,
+    });
+    mockPreviewMutateAsync.mockResolvedValue({
+      operation: 'reject_candidate',
+      preview: { action: 'reject_candidate' },
+      requiresConfirmation: true,
+    });
+
+    renderEntityGraph();
+
+    expect(screen.getByTestId('entity-review-card-review-2')).toHaveTextContent('candidate');
+    expect(screen.getByText('candidate-west')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirm candidate/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Reject candidate/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Reject candidate/ }));
+    await waitFor(() => {
+      expect(mockPreviewMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+        operation: 'reject_candidate',
+        reviewItemId: 'review-2',
+        sourceId: 'candidate-west',
+      }));
+    });
+  });
+
+  it('does not turn legacy string action_choices into review actions', () => {
+    mockUseEntityReview.mockReturnValue({
+      data: {
+        queue: [{ ...duplicateReviewItem, action_choices: ['merge_as_alias', 'skip'] }],
+        total: 1,
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderEntityGraph();
+
+    expect(screen.getByTestId('entity-review-contract-missing-review-1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Same/ })).not.toBeInTheDocument();
   });
 
   // 9. Empty review queue
@@ -315,7 +592,7 @@ describe('EntityGraph', () => {
   it('previews delete before enabling confirmation', async () => {
     mockPreviewMutateAsync.mockResolvedValue({
       operation: 'delete',
-      preview: { entityId: 'person-a', impact: '1 relationship' },
+      preview: { entityId: 'entity-a', impact: '1 relationship' },
       requiresConfirmation: true,
     });
 
@@ -325,7 +602,7 @@ describe('EntityGraph', () => {
     await waitFor(() => {
       expect(mockPreviewMutateAsync).toHaveBeenCalledWith({
         operation: 'delete',
-        entityId: 'person-a',
+        entityId: 'entity-a',
       });
     });
     expect(await screen.findByTestId('entity-mutation-preview')).toHaveTextContent('delete');
@@ -335,12 +612,12 @@ describe('EntityGraph', () => {
   it('requires accepted preview before confirming a delete mutation', async () => {
     mockPreviewMutateAsync.mockResolvedValue({
       operation: 'delete',
-      preview: { entityId: 'person-a' },
+      preview: { entityId: 'entity-a' },
       requiresConfirmation: true,
     });
     mockConfirmMutateAsync.mockResolvedValue({
       operation: 'delete',
-      mutation: { entityId: 'person-a', status: 'deleted' },
+      mutation: { entityId: 'entity-a', status: 'deleted' },
       postCheck: { issues: [] },
       postCheckOk: true,
     });
@@ -357,7 +634,7 @@ describe('EntityGraph', () => {
     await waitFor(() => {
       expect(mockConfirmMutateAsync).toHaveBeenCalledWith({
         operation: 'delete',
-        entityId: 'person-a',
+        entityId: 'entity-a',
       });
     });
     expect(await screen.findByTestId('entity-post-check')).toHaveTextContent('图谱完整性检查通过');
@@ -368,8 +645,8 @@ describe('EntityGraph', () => {
       data: [
         ...defaultList.data,
         {
-          id: 'person-b',
-          type: 'person',
+          id: 'entity-b',
+          type: 'actor',
           primary_name: '李四',
           aliases: [],
           attributes: {},
@@ -381,21 +658,21 @@ describe('EntityGraph', () => {
     });
     mockPreviewMutateAsync.mockResolvedValue({
       operation: 'merge_as_alias',
-      preview: { sourceId: 'person-a', targetId: 'person-b' },
+      preview: { sourceId: 'entity-a', targetId: 'entity-b' },
       requiresConfirmation: true,
     });
 
     renderEntityGraph();
     fireEvent.change(screen.getByTestId('entity-merge-target'), {
-      target: { value: 'person-b' },
+      target: { value: 'entity-b' },
     });
     fireEvent.click(screen.getByTestId('entity-merge-preview'));
 
     await waitFor(() => {
       expect(mockPreviewMutateAsync).toHaveBeenCalledWith({
         operation: 'merge_as_alias',
-        sourceId: 'person-a',
-        targetId: 'person-b',
+        sourceId: 'entity-a',
+        targetId: 'entity-b',
       });
     });
   });

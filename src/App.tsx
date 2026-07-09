@@ -13,6 +13,7 @@ const JournalDetail = lazy(() => import('@/app/routes/JournalDetail'));
 const EmptyState = lazy(() => import('@/app/routes/EmptyState'));
 const HealthCenter = lazy(() => import('@/app/routes/HealthCenter'));
 const EntityGraph = lazy(() => import('@/app/routes/EntityGraph'));
+const EntityProfile = lazy(() => import('@/app/routes/EntityProfile'));
 const IndexDiagnostics = lazy(() => import('@/app/routes/IndexDiagnostics'));
 const IndexTreeDiagnostics = lazy(() => import('@/app/routes/IndexTreeDiagnostics'));
 const ImportWorkflow = lazy(() => import('@/app/routes/ImportWorkflow'));
@@ -51,6 +52,7 @@ export default function App() {
 
               {/* Legacy redirect */}
               <Route path="/entities" element={<Navigate to="/maintenance/entities" replace />} />
+              <Route path="/entities/:entityId" element={<EntityProfile />} />
 
               <Route path="/journal/*" element={
                 <ErrorBoundary>

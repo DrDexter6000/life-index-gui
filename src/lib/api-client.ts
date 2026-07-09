@@ -8,7 +8,9 @@ import {
   MoodFrequencySchema,
   HeatmapDaySchema,
   RawSearchResponseSchema,
+  EntityExpansionSchema,
   HealthCheckSchema,
+  VersionCheckSchema,
   DataAuditSchema,
   IndexCheckSchema,
   VerifyDiagnosticsSchema,
@@ -29,6 +31,7 @@ import {
   EntityAuditSchema,
   EntityReviewSchema,
   EntityCandidateEdgesSchema,
+  EntityProfileSchema,
   EntityMutationPreviewSchema,
   EntityMutationConfirmSchema,
   ImportPlanResponseSchema,
@@ -314,12 +317,17 @@ export const journalAPI = {
     const results = rawResults.map((item) =>
       addExcerpt(parseData(JournalSummarySchema, item)),
     );
+    const rawEntityExpansion = envelope.meta?.entityExpansion ?? envelope.entity_expansion;
+    const entityExpansion = rawEntityExpansion
+      ? parseData(EntityExpansionSchema, rawEntityExpansion)
+      : undefined;
     return {
       results,
       total: envelope.total ?? envelope.total_found ?? results.length,
       page: 1,
       perPage: results.length,
       meta: envelope.meta,
+      ...(entityExpansion ? { entityExpansion } : {}),
     };
   },
 
@@ -502,7 +510,10 @@ export interface SearchResponse {
   page: number;
   perPage: number;
   meta?: Record<string, unknown>;
+  entityExpansion?: EntityExpansion;
 }
+
+export type EntityExpansion = z.infer<typeof EntityExpansionSchema>;
 
 export interface SmartSearchResult {
   scaffold: Array<{ step?: string; description?: string }>;
@@ -554,6 +565,8 @@ export interface HealthResponse {
   } | null | undefined;
   error?: Record<string, unknown> | null;
 }
+
+export type VersionResponse = z.infer<typeof VersionCheckSchema>;
 
 export interface DataAuditResponse {
   success: boolean;
@@ -693,14 +706,25 @@ export type EntityListResponse =
   | EntityItem[]
   | { entities?: EntityItem[]; items?: EntityItem[]; [key: string]: unknown };
 export type EntityCandidateEdgesResponse = CandidateEdgesResponse;
+export type EntityProfile = z.infer<typeof EntityProfileSchema>;
 
 // ── Entity mutation types (S5 — Guarded Entity Mutation UX) ───────────────
 
 export interface EntityMutationRequest {
-  operation: 'delete' | 'merge_as_alias';
+  operation:
+    | 'delete'
+    | 'merge_as_alias'
+    | 'keep_separate'
+    | 'undo_keep_separate'
+    | 'add_relationship'
+    | 'confirm_candidate'
+    | 'reject_candidate'
+    | 'skip';
   entityId?: string;
+  reviewItemId?: string;
   sourceId?: string;
   targetId?: string;
+  relation?: string;
 }
 
 export interface EntityMutationPreviewResponse {
@@ -727,6 +751,12 @@ export const healthAPI = {
   getHealth: async (options?: RequestInit): Promise<HealthResponse> => {
     const raw = await apiClient.get('/health', options);
     return parseData(HealthCheckSchema, raw);
+  },
+
+  /** Fetch GUI/CLI version compatibility metadata. */
+  getVersion: async (): Promise<VersionResponse> => {
+    const raw = await apiClient.get('/version');
+    return parseData(VersionCheckSchema, raw);
   },
 
   /** Fetch CLI data-audit diagnostics for data cleanliness report */
@@ -955,6 +985,15 @@ export const entityAPI = {
     const raw = await apiClient.get(`/entities/candidate-edges${qs}`);
     return parseData(EntityCandidateEdgesSchema, raw);
   },
+
+  /** Fetch a confirmed entity profile by stable id or unique name. */
+  getProfile: async (selector: { id?: string; name?: string }): Promise<EntityProfile> => {
+    const query = new URLSearchParams();
+    if (selector.id) query.set('id', selector.id);
+    if (selector.name) query.set('name', selector.name);
+    const raw = await apiClient.get(`/entities/profile?${query.toString()}`);
+    return parseData(EntityProfileSchema, raw);
+  },
 };
 
 export const entityMaintenanceAPI = {
@@ -970,8 +1009,10 @@ export const entityMaintenanceAPI = {
     const raw = await apiClient.post('/entities/mutations/preview', {
       operation: req.operation,
       entityId: req.entityId,
+      reviewItemId: req.reviewItemId,
       sourceId: req.sourceId,
       targetId: req.targetId,
+      relation: req.relation,
     });
     return parseData(EntityMutationPreviewSchema, raw);
   },
@@ -981,8 +1022,10 @@ export const entityMaintenanceAPI = {
     const raw = await apiClient.post('/entities/mutations/confirm', {
       operation: req.operation,
       entityId: req.entityId,
+      reviewItemId: req.reviewItemId,
       sourceId: req.sourceId,
       targetId: req.targetId,
+      relation: req.relation,
       previewAccepted: true,
     });
     return parseData(EntityMutationConfirmSchema, raw);

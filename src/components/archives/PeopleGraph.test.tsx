@@ -7,6 +7,10 @@ const mockUseEntityList = vi.fn();
 const mockUseEntityCandidateEdges = vi.fn();
 const mockNavigate = vi.fn();
 
+vi.mock('echarts-for-react', () => ({
+  default: () => <div data-testid="people-graph-chart" />,
+}));
+
 vi.mock('@/hooks/useJournals', () => ({
   useEntityList: (type: string) => mockUseEntityList(type),
   useEntityCandidateEdges: (limit: number) => mockUseEntityCandidateEdges(limit),
@@ -30,6 +34,8 @@ vi.mock('@/hooks/useTranslation', () => ({
         noData: 'No Data',
         peopleGraphLowData: 'More journal entries will reveal your constellation of connections',
         peopleGraphLowDataHint: 'Keep writing — your people graph will appear here.',
+        peopleGraphConfirmedPending: 'Relationship graph will appear after confirmed relationships are available.',
+        peopleGraphConfirmedPendingHint: 'Candidate edges stay in review and are not shown as relationships.',
         journalCount: '{{count}} entries',
       };
       return map[key] ?? key;
@@ -76,47 +82,23 @@ beforeEach(() => {
 });
 
 describe('PeopleGraph', () => {
-  it('shows loading state while entities are loading', () => {
-    mockUseEntityList.mockReturnValue({ ...defaultList, isLoading: true });
+  it('shows a confirmed-relationships pending state for Phase 0', () => {
     renderPeopleGraph();
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(screen.getByText('Relationship graph will appear after confirmed relationships are available.')).toBeInTheDocument();
+    expect(screen.getByText('Candidate edges stay in review and are not shown as relationships.')).toBeInTheDocument();
   });
 
-  it('shows no-data state when there are zero entities', () => {
-    mockUseEntityList.mockReturnValue({ ...defaultList, data: [] });
+  it('does not request the retired person entity type', () => {
     renderPeopleGraph();
-    expect(screen.getByText('No Data')).toBeInTheDocument();
+    expect(mockUseEntityList).not.toHaveBeenCalledWith('person');
   });
 
-  it('shows low-data empty state when there are fewer than 8 nodes', () => {
-    mockUseEntityList.mockReturnValue({
-      ...defaultList,
-      data: [
-        makePerson('p1', 'Alice'),
-        makePerson('p2', 'Bob'),
-        makePerson('p3', 'Carol'),
-        makePerson('p4', 'Dave'),
-        makePerson('p5', 'Eve'),
-      ],
-    });
+  it('does not consume candidate edges for the consumer relationship graph', () => {
     renderPeopleGraph();
-    expect(screen.getByText('More journal entries will reveal your constellation of connections')).toBeInTheDocument();
-    expect(screen.getByText('Keep writing — your people graph will appear here.')).toBeInTheDocument();
+    expect(mockUseEntityCandidateEdges).not.toHaveBeenCalled();
   });
 
-  it('renders the graph when there are 8 or more nodes', () => {
-    mockUseEntityList.mockReturnValue({
-      ...defaultList,
-      data: Array.from({ length: 8 }, (_, i) => makePerson(`p${i + 1}`, `Person ${i + 1}`)),
-    });
-    renderPeopleGraph();
-    expect(screen.queryByText('More journal entries will reveal your constellation of connections')).not.toBeInTheDocument();
-    expect(screen.queryByText('No Data')).not.toBeInTheDocument();
-    // Both kicker and title render "People Graph" in the mock; verify at least one heading is present
-    expect(screen.getByRole('heading', { name: 'People Graph' })).toBeInTheDocument();
-  });
-
-  it('renders the graph when there are many nodes', () => {
+  it('does not render a graph from candidate edge fixtures', () => {
     mockUseEntityList.mockReturnValue({
       ...defaultList,
       data: Array.from({ length: 15 }, (_, i) => makePerson(`p${i + 1}`, `Person ${i + 1}`, [`alias${i}`])),
@@ -132,7 +114,7 @@ describe('PeopleGraph', () => {
       },
     });
     renderPeopleGraph();
-    expect(screen.queryByText('More journal entries will reveal your constellation of connections')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'People Graph' })).toBeInTheDocument();
+    expect(screen.queryByTestId('people-graph-chart')).not.toBeInTheDocument();
+    expect(screen.getByText('Relationship graph will appear after confirmed relationships are available.')).toBeInTheDocument();
   });
 });

@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkDevEnvironment } from './lib/require-dev-env.mjs';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(scriptPath), '..');
@@ -17,14 +18,23 @@ export function buildVitestEnv(baseEnv = process.env) {
 }
 
 export function runVitest(argv = process.argv.slice(2), options = {}) {
-  if (!existsSync(vitestBin)) {
-    console.error('Vitest is not installed. Run `npm install --include=dev` or `npm ci` first.');
+  const env = options.env ?? process.env;
+  const guard = checkDevEnvironment({ env, command: 'npm run test' });
+  if (!guard.ok) {
+    (options.stderr ?? console.error)(guard.error.message);
     return 1;
   }
 
-  const result = spawnSync(process.execPath, [vitestBin, 'run', ...argv], {
+  const exists = options.exists ?? existsSync;
+  if (!exists(vitestBin)) {
+    (options.stderr ?? console.error)('Vitest is not installed. Run `npm install --include=dev` or `npm ci` first.');
+    return 1;
+  }
+
+  const spawn = options.spawnSync ?? spawnSync;
+  const result = spawn(process.execPath, [vitestBin, 'run', ...argv], {
     cwd: options.cwd ?? repoRoot,
-    env: buildVitestEnv(options.env ?? process.env),
+    env: buildVitestEnv(env),
     stdio: 'inherit',
   });
 

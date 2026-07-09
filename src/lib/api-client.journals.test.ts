@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { journalAPI } from '@/lib/api-client';
+import { APIClientError, entityAPI, journalAPI } from '@/lib/api-client';
 
 // ── Mock fetch for API method tests ────────────────────────────────────────
 
@@ -102,5 +102,148 @@ describe('journalAPI.create', () => {
     expect(body.get('files')).toBeInstanceOf(File);
 
     expect(result.id).toBe('journal-with-attachment-001');
+  });
+});
+
+describe('journalAPI.search', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('maps backend entityExpansion meta into the typed search response', async () => {
+    const entityExpansion = {
+      applied: true,
+      expansions: [
+        {
+          from: 'Ally',
+          to: ['Alice'],
+          via: 'alias',
+          entity_id: 'actor-alice',
+          primary_name: 'Alice',
+        },
+        {
+          from: '女儿',
+          to: ['Alice', 'Ally'],
+          via: 'relation',
+          entity_id: 'actor-alice',
+          primary_name: 'Alice',
+        },
+      ],
+    };
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => (
+      mockFetchResponse({
+        results: [
+          {
+            id: '2026/04/life-index_2026-04-19_001',
+            title: 'Entity Result',
+            date: '2026-04-19',
+            abstract: null,
+            topics: [],
+            moods: [],
+            people: [],
+            tags: [],
+            location: null,
+            project: null,
+          },
+        ],
+        total: 1,
+        meta: { entityExpansion },
+      }) as Response
+    ));
+
+    const result = await journalAPI.search({ query: 'Ally' });
+
+    expect(result.entityExpansion).toEqual(entityExpansion);
+    expect(result.meta?.entityExpansion).toEqual(entityExpansion);
+    expect(result.entityExpansion?.expansions[0]?.to).toEqual(['Alice']);
+    expect(result.entityExpansion?.expansions[1]?.to).toEqual(['Alice', 'Ally']);
+  });
+});
+
+describe('entityAPI.getProfile', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('parses entity profile JSON and calls the id selector endpoint', async () => {
+    let capturedUrl = '';
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      capturedUrl = String(url);
+      return mockFetchResponse({
+        identity: {
+          entity_id: 'actor-alice',
+          primary_name: 'Alice',
+          aliases: ['Ally'],
+          type: 'actor',
+          kind: 'human',
+          status: 'confirmed',
+          is_self: true,
+        },
+        relationships: [
+          {
+            target: 'actor-bob',
+            target_name: 'Bob',
+            relation: 'friend_of',
+            source: 'user',
+            status: 'confirmed',
+            evidence: ['Journals/2026/03/life-index_2026-03-15_001.md'],
+          },
+        ],
+        mentions: [
+          {
+            rel_path: 'Journals/2026/03/life-index_2026-03-15_001.md',
+            date: '2026-03-15',
+            title: 'Primary Mention',
+          },
+        ],
+        evidence: ['Journals/2026/03/life-index_2026-03-15_001.md'],
+        stats: {
+          first_mention: '2026-03-15',
+          latest_mention: '2026-03-15',
+          mention_count: 1,
+          relationship_count: 1,
+        },
+        schemaVersion: 'v1.1.1',
+        provenance: { generator: 'entity' },
+      }) as Response;
+    });
+
+    const result = await entityAPI.getProfile({ id: 'actor-alice' });
+
+    expect(capturedUrl).toBe('/api/entities/profile?id=actor-alice');
+    expect(result.identity.primary_name).toBe('Alice');
+    expect(result.identity.is_self).toBe(true);
+    expect(result.relationships[0]?.target_name).toBe('Bob');
+    expect(result.mentions[0]?.rel_path).toBe('Journals/2026/03/life-index_2026-03-15_001.md');
+  });
+
+  it('surfaces candidate profile errors without parsing profile content', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: () => Promise.resolve({
+        ok: false,
+        data: null,
+        error: {
+          code: 'ENTITY_PROFILE_CANDIDATE',
+          message: 'candidate entities do not have confirmed profiles',
+          details: {
+            entity_id: 'actor-morgan',
+            status: 'candidate',
+            suggested_command: 'life-index entity --review',
+          },
+        },
+      }),
+    }) as Response);
+
+    await expect(entityAPI.getProfile({ id: 'actor-morgan' })).rejects.toMatchObject({
+      code: 'ENTITY_PROFILE_CANDIDATE',
+      details: {
+        suggested_command: 'life-index entity --review',
+      },
+    } satisfies Partial<APIClientError>);
   });
 });

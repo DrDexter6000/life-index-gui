@@ -87,6 +87,65 @@ const degradedHealth = {
   isFetching: false,
 };
 
+const entityProfilesStaleHealth = {
+  data: {
+    status: 'ok',
+    cli_available: true,
+    compatible: true,
+    package_version: '1.4.1',
+    repo_version: '1.4.1',
+    health: {
+      status: 'healthy',
+      journal_count: 42,
+      events: [
+        {
+          type: 'entity_profiles_stale',
+          severity: 'info',
+          message: 'Entity profile docs are stale.',
+          suggested_command: 'life-index abstract --entities',
+        },
+      ],
+      checks: [
+        {
+          name: 'entity_profiles_stale',
+          status: 'warn',
+          hint: 'life-index abstract --entities',
+        },
+      ],
+    },
+  },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+};
+
+const entityProfilesStaleNestedDataHealth = {
+  data: {
+    status: 'ok',
+    cli_available: true,
+    compatible: true,
+    package_version: '1.4.1',
+    repo_version: '1.4.1',
+    health: {
+      status: 'healthy',
+      journal_count: 42,
+      data: {
+        events: [
+          {
+            type: 'entity_profiles_stale',
+            severity: 'info',
+            message: 'Nested entity profile docs are stale.',
+            suggested_command: 'life-index abstract --entities',
+          },
+        ],
+      },
+    },
+  },
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+};
+
 const unavailableHealth = {
   data: {
     status: 'degraded',
@@ -197,6 +256,31 @@ describe('HealthCenter', () => {
     expect(screen.getByTestId('health-status-icon').textContent).toContain('warning');
     expect(screen.getByTestId('health-status-title').textContent).toContain('状态降级');
     expect(screen.getByText('stale_index_tree')).toBeInTheDocument();
+  });
+
+  it('renders entity profile stale maintenance hint as informational command', () => {
+    mockUseHealthCheck.mockReturnValue(entityProfilesStaleHealth);
+    renderHealthCenter();
+
+    expect(screen.getByTestId('entity-profiles-stale-hint')).toHaveTextContent('实体档案需要重建');
+    expect(screen.getByTestId('entity-profiles-stale-hint')).toHaveTextContent('life-index abstract --entities');
+    expect(screen.getByTestId('health-status-icon').textContent).toContain('check_circle');
+    expect(screen.queryByText('entity_profiles_stale')).not.toBeInTheDocument();
+  });
+
+  it('renders entity profile stale maintenance hint from nested health data events', () => {
+    mockUseHealthCheck.mockReturnValue(entityProfilesStaleNestedDataHealth);
+    renderHealthCenter();
+
+    expect(screen.getByTestId('entity-profiles-stale-hint')).toHaveTextContent('实体档案需要重建');
+    expect(screen.getByTestId('entity-profiles-stale-hint')).toHaveTextContent('life-index abstract --entities');
+    expect(screen.getByTestId('entity-profiles-stale-hint')).toHaveTextContent('Nested entity profile docs are stale.');
+  });
+
+  it('does not render entity profile stale maintenance hint when health has no stale event', () => {
+    renderHealthCenter();
+
+    expect(screen.queryByTestId('entity-profiles-stale-hint')).not.toBeInTheDocument();
   });
 
   it('renders CLI unavailable state with cloud_off icon', () => {

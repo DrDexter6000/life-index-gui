@@ -1,7 +1,16 @@
 ## [Unreleased]
 
-### Changed
-- License changed to AGPL-3.0-only for the next released version. Local use is unaffected; hosted derivative services must publish corresponding source.
+## [0.4.0] - 2026-07-09
+
+### What users get
+- Entity graph returns are now visible in the GUI: search results can show entity-expansion attribution, entity links open profile pages, review cards let users preview and confirm CLI-backed entity decisions, and health surfaces point to entity maintenance signals.
+- Host agents now have a deterministic GUI upgrade path: `npm run gui-upgrade:plan` and `npm run gui-upgrade:apply` inspect and safely repair local git freshness, Node dev dependencies, Python backend dependencies, CLI feature gates, and final `verify-stack` state with fail-closed JSON output.
+- This release is licensed AGPL-3.0-only. Local personal use is unaffected; hosted derivative services must publish corresponding source and modifications.
+
+### Included in this release
+- Entity graph consumption: search attribution for CLI entity expansion, entity profile pages, entity review cards, and health/entity maintenance signals.
+- GUI upgrade atom S1-S5: contract skeleton, git freshness/fail-closed apply, Node devDependency recovery, Python backend dependency checks, CLI feature gates, and verify-stack closure.
+- Compatibility: baseline CLI remains `1.3.7+`; entity review cards require CLI `1.4.4+`; CLI `1.4.5` is recommended for this release.
 
 ## [0.3.0] - 2026-07-03
 

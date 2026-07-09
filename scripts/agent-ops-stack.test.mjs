@@ -138,6 +138,19 @@ try {
     },
     'verify-stack command must exit non-zero before spawning processes when vite is missing',
   );
+
+  const productionEnvPreflight = preflightVerifyStackDevDependencies({
+    repoRoot: tempRoot,
+    env: { ...process.env, NODE_ENV: 'production' },
+  });
+  assert.equal(productionEnvPreflight.ok, false);
+  assert.deepEqual(productionEnvPreflight.missing, []);
+  assert.equal(productionEnvPreflight.error.code, 'VERIFY_STACK_NODE_ENV_PRODUCTION');
+  assert.match(productionEnvPreflight.error.message, /NODE_ENV=production/);
+  assert.match(productionEnvPreflight.error.message, /requires devDependencies/);
+  assert.match(productionEnvPreflight.error.message, /unset NODE_ENV/);
+  assert.match(productionEnvPreflight.error.message, /\$env:NODE_ENV=''/);
+  assert.match(productionEnvPreflight.error.message, /npm ci --include=dev/);
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

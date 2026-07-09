@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { AnimatePresence, motion } from 'motion/react';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useJournalSearch } from '@/hooks/useJournals';
@@ -7,7 +7,7 @@ import { useHostAgentHealth, useHostAgentStream } from '@/hooks/useHostAgent';
 import { AI_PLUS_FEATURE_ENABLES } from '@/lib/health-status';
 import { saveScrollPosition, readScrollPosition } from '@/lib/scroll-restoration';
 import type { HostAgentConversationTurn } from '@/hooks/useHostAgent';
-import type { HostAgentQueryResponse } from '@/lib/api-client';
+import type { EntityExpansion, HostAgentQueryResponse } from '@/lib/api-client';
 import { JournalCard } from '@/components/celestial/JournalCard';
 import { CelestialLoader } from '@/components/celestial/CelestialLoader';
 import { HostAgentAnswerPanel } from '@/components/host-agent/HostAgentAnswerPanel';
@@ -15,6 +15,16 @@ import { HostAgentStreamPanel } from '@/components/host-agent/HostAgentStreamPan
 import type { LaneStatus } from './recallWorkbenchState';
 
 type RecallTab = 'keyword' | 'agent';
+type EntityExpansionEntry = EntityExpansion['expansions'][number];
+
+function formatEntityExpansionTargets(value: EntityExpansionEntry['to'] | string | unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .join(', ');
+  }
+  return typeof value === 'string' ? value : '';
+}
 
 function deriveLaneStatus(
   hasCriteria: boolean,
@@ -27,6 +37,27 @@ function deriveLaneStatus(
   if (isError) return 'error';
   if (resultCount === 0) return 'empty';
   return 'success';
+}
+
+function formatEntityExpansionEntry(
+  entry: EntityExpansionEntry,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const from = typeof entry.from === 'string' ? entry.from : '';
+  const to = formatEntityExpansionTargets(entry.to);
+  if (entry.via === 'alias' && from && to) {
+    return t('entityExpansionAlias', { from, to });
+  }
+  if (entry.via === 'relation' && from && to) {
+    return t('entityExpansionRelation', { from, to });
+  }
+  return t('entityExpansionGeneric');
+}
+
+function entityProfilePath(entry: EntityExpansionEntry): string | null {
+  return typeof entry.entity_id === 'string' && entry.entity_id.trim()
+    ? `/entities/${encodeURIComponent(entry.entity_id)}`
+    : null;
 }
 
 export default function Recall() {
@@ -115,6 +146,15 @@ export default function Recall() {
     keywordQuery.isLoading,
     keywordQuery.isError,
     keywordResults.length,
+  );
+  const entityExpansionItems = useMemo(() => {
+    const expansion = keywordQuery.data?.entityExpansion;
+    if (expansion?.applied !== true || !Array.isArray(expansion.expansions)) return [];
+    return expansion.expansions.slice(0, 3);
+  }, [keywordQuery.data]);
+  const entityExpansionMore = Math.max(
+    0,
+    (keywordQuery.data?.entityExpansion?.expansions?.length ?? 0) - entityExpansionItems.length,
   );
 
   useEffect(() => {
@@ -528,6 +568,39 @@ export default function Recall() {
 
           <div className="li-workbench" aria-live="polite">
             <section aria-label={t('searchModeKeyword')} data-testid="keyword-lane">
+              {entityExpansionItems.length > 0 && (
+                <div
+                  className="mb-4 rounded-2xl border border-white/[0.08] bg-[var(--color-ether-surface-ghost)] px-4 py-3 text-sm text-[var(--color-secondary)]"
+                  data-testid="entity-expansion-strip"
+                >
+                  <div className="mb-2 flex items-center gap-2 text-[var(--color-primary)]">
+                    <span className="material-symbols-outlined text-base text-[var(--color-cyan)]">hub</span>
+                    <span className="font-medium">{t('entityExpansionTitle')}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {entityExpansionItems.map((entry, index) => {
+                      const path = entityProfilePath(entry);
+                      const label = formatEntityExpansionEntry(entry, t);
+                      const key = `${String(entry.via ?? 'entity')}-${String(entry.from ?? index)}-${JSON.stringify(entry.to ?? index)}`;
+                      const className = 'rounded-full border border-white/[0.08] px-3 py-1 text-xs text-[var(--color-secondary)]';
+                      return path ? (
+                        <Link key={key} to={path} className={className}>
+                          {label}
+                        </Link>
+                      ) : (
+                        <span key={key} className={className}>
+                          {label}
+                        </span>
+                      );
+                    })}
+                    {entityExpansionMore > 0 && (
+                      <span className="rounded-full border border-white/[0.08] px-3 py-1 text-xs text-[var(--color-muted)]">
+                        {t('entityExpansionMore', { count: entityExpansionMore })}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
               {keywordStatus === 'error' && (
                 <div className="py-10 text-center" data-testid="keyword-error">
                   <span className="material-symbols-outlined mb-3 block text-3xl text-[var(--color-coral)]">error_outline</span>

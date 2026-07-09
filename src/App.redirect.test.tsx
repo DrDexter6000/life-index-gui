@@ -29,6 +29,10 @@ vi.mock('@/app/routes/EntityGraph', () => ({
   __esModule: true,
   default: () => <div data-testid="entity-graph-route">EntityGraph</div>,
 }));
+vi.mock('@/app/routes/EntityProfile', () => ({
+  __esModule: true,
+  default: () => <div data-testid="entity-profile-route">EntityProfile</div>,
+}));
 vi.mock('@/app/routes/IndexDiagnostics', () => ({
   __esModule: true,
   default: () => <div>IndexDiagnostics</div>,
@@ -75,8 +79,22 @@ describe('/entities legacy redirect', () => {
   it('redirects /entities to /maintenance/entities', async () => {
     renderAppAt('/entities');
 
-    await waitFor(() => {
-      expect(screen.getByTestId('entity-graph-route')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('entity-graph-route')).toBeInTheDocument();
+      },
+      { timeout: 5_000 },
+    );
+  });
+
+  it('keeps /entities/:entityId available for entity profiles', async () => {
+    renderAppAt('/entities/actor-alice');
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('entity-profile-route')).toBeInTheDocument();
+      },
+      { timeout: 5_000 },
+    );
   });
 });

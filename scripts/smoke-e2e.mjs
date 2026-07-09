@@ -6,11 +6,16 @@
  * errors. Screenshots are written to the git-ignored `.tmp/smoke-e2e/`.
  */
 
-import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { resolvePythonCommand } from './lib/python-interpreter.mjs';
+import { requireDevEnvironment } from './lib/require-dev-env.mjs';
+
+const devEnvExitCode = requireDevEnvironment({ command: 'npm run smoke:e2e' });
+if (devEnvExitCode !== 0) {
+  process.exit(devEnvExitCode);
+}
 
 const BACKEND_PORT = Number(process.env.BACKEND_PORT || 18000);
 const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 15173);
@@ -136,6 +141,7 @@ async function main() {
     await waitForUrl(FRONTEND_URL, READINESS_TIMEOUT_MS, READINESS_INTERVAL_MS);
     process.stdout.write('[smoke:e2e] Vite ready.\n');
 
+    const { chromium } = await import('playwright');
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
       viewport: { width: 1280, height: 800 },

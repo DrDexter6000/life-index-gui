@@ -41,6 +41,8 @@
 
 Life Index CLI is the native tool layer for agents. Life Index GUI is the experience layer for human users. The CLI owns durable data and deterministic capability boundaries; the GUI turns writing, search, review, mobile access, and AI+ results into an interface people can actually live with.
 
+The GUI also consumes CLI entity-graph returns: search can show entity-expansion attribution, entity links open profile pages, and review cards let you preview and confirm CLI-backed entity maintenance. See [CHANGELOG.md](CHANGELOG.md) for release scope and `/api/version` for local compatibility.
+
 <p align="center">
   <img src="public/launch/life-index-gui-poster-quiet-star-ring.png" alt="Life Index GUI product overview poster for writing and mobile browsing" width="860" />
 </p>
@@ -149,7 +151,14 @@ npm run build
 
 ## Upgrade
 
-For the complete upgrade and operations steps, see [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md).
+Host agents should start with the GUI upgrade atom:
+
+```bash
+npm run gui-upgrade:plan
+npm run gui-upgrade:apply
+```
+
+It checks and applies safe local git, Node, Python backend, CLI feature-gate, and `verify-stack` recovery through fail-closed JSON. For the complete upgrade and operations steps, see [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md).
 
 ## Temporary Phone Access
 
