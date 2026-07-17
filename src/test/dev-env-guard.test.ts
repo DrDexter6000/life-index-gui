@@ -6,6 +6,35 @@ import { describe, expect, it } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..', '..');
+const guardedScriptNames = [
+  'dev',
+  'dev:all',
+  'build',
+  'preview',
+  'lint',
+  'mobile:acceptance',
+  'test',
+  'test:watch',
+  'verify-stack',
+  'smoke:e2e',
+  'smoke:d3',
+];
+
+function assertExistingDevScriptsAreGuarded(scripts: Record<string, string>) {
+  for (const scriptName of guardedScriptNames) {
+    const script = scripts[scriptName];
+    const prescriptName = `pre${scriptName}`;
+    const prescript = scripts[prescriptName];
+
+    if (script === undefined) {
+      expect(prescript, `${prescriptName} without ${scriptName}`).toBeUndefined();
+      continue;
+    }
+
+    expect(prescript, prescriptName).toContain('node scripts/require-dev-env.mjs');
+    expect(prescript, prescriptName).toContain(`npm run ${scriptName}`);
+  }
+}
 
 function runGuard(nodeEnv?: string) {
   const env = { ...process.env };
@@ -51,22 +80,15 @@ describe('dev dependency NODE_ENV guard', () => {
     const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
     const scripts = packageJson.scripts as Record<string, string>;
 
-    for (const scriptName of [
-      'dev',
-      'dev:all',
-      'build',
-      'preview',
-      'lint',
-      'mobile:acceptance',
-      'test',
-      'test:watch',
-      'verify-stack',
-      'smoke:e2e',
-      'smoke:d3',
-    ]) {
-      const prescript = scripts[`pre${scriptName}`];
-      expect(prescript, `pre${scriptName}`).toContain('node scripts/require-dev-env.mjs');
-      expect(prescript, `pre${scriptName}`).toContain(`npm run ${scriptName}`);
-    }
+    assertExistingDevScriptsAreGuarded(scripts);
+  });
+
+  it('accepts a curated package only when an omitted script has no dangling prescript', () => {
+    const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
+    const scripts = { ...packageJson.scripts } as Record<string, string>;
+    delete scripts['smoke:d3'];
+    delete scripts['presmoke:d3'];
+
+    assertExistingDevScriptsAreGuarded(scripts);
   });
 });
