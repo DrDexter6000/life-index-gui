@@ -11,8 +11,8 @@ const repoRoot = resolve(__dirname, '..');
 const guiUpgradeScript = join(repoRoot, 'scripts', 'gui-upgrade.mjs');
 const requiredDevDeps = ['vite', 'typescript', 'eslint', 'vitest'];
 const requiredBackendModules = ['fastapi', 'uvicorn', 'pydantic_core', 'PIL'];
-const cliMinimumVersion = '1.3.7';
-const entityReviewCardsCliVersion = '1.4.4';
+const cliMinimumVersion = '1.4.5';
+const entityReviewCardsCliVersion = '1.4.5';
 
 function git(cwd, args) {
   return execFileSync('git', args, {
@@ -634,6 +634,25 @@ assert.match(
   }
 }
 
+for (const plainTextVersion of ['life-index 1.4.5x', 'life-index 1.5', 'life-index 1.4.5-rc.1']) {
+  const fixture = makeRemoteFixture();
+  try {
+    const planResult = planGuiUpgrade({
+      repoRoot: fixture.work,
+      commandRunner: makeCliCommandRunner({ stdout: `${plainTextVersion}\n` }),
+    });
+    assertCliDependencyContract(planResult.data.cli_dependency);
+    assert.equal(planResult.data.cli_dependency.status, 'unknown');
+    assert.equal(planResult.data.cli_dependency.compatible, false);
+    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
+    assert.match(planResult.data.recommended_next_step.reason, /could not be parsed/);
+    assertActionContracts(planResult);
+    assertNoForbiddenCommands(planResult);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
 {
   const fixture = makeRemoteFixture();
   try {
@@ -857,7 +876,7 @@ assert.match(
     assert.equal(planResult.data.cli_dependency.cli_package_version, '1.2.9');
     assert.equal(planResult.data.cli_dependency.compatible, false);
     assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.match(planResult.data.recommended_next_step.reason, /minimum CLI 1\.3\.7/);
+    assert.match(planResult.data.recommended_next_step.reason, /minimum CLI 1\.4\.5/);
     assertActionContracts(planResult);
     assertNoForbiddenCommands(planResult);
   } finally {
@@ -875,12 +894,12 @@ assert.match(
     assertCliDependencyContract(planResult.data.cli_dependency);
     assert.equal(planResult.data.cli_dependency.status, 'incompatible');
     assert.equal(planResult.data.cli_dependency.cli_package_version, '1.4.3');
-    assert.equal(planResult.data.cli_dependency.compatible, true);
+    assert.equal(planResult.data.cli_dependency.compatible, false);
     const reviewGate = planResult.data.cli_dependency.feature_gates.find((gate) => gate.id === 'entity_review_cards');
     assert.equal(reviewGate.satisfied, false);
-    assert.match(reviewGate.reason, /requires CLI 1\.4\.4/);
+    assert.match(reviewGate.reason, /requires CLI 1\.4\.5/);
     assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.match(planResult.data.recommended_next_step.reason, /entity_review_cards/);
+    assert.match(planResult.data.recommended_next_step.reason, /minimum CLI 1\.4\.5/);
     assertActionContracts(planResult);
     assertNoForbiddenCommands(planResult);
   } finally {
@@ -896,15 +915,35 @@ assert.match(
       commandRunner: makeCliCommandRunner({ version: '1.4.4' }),
     });
     assertCliDependencyContract(planResult.data.cli_dependency);
-    assert.equal(planResult.data.cli_dependency.status, 'ok');
+    assert.equal(planResult.data.cli_dependency.status, 'incompatible');
     assert.equal(planResult.data.cli_dependency.cli_package_version, '1.4.4');
-    assert.equal(planResult.data.cli_dependency.compatible, true);
+    assert.equal(planResult.data.cli_dependency.compatible, false);
     assert.equal(
       planResult.data.cli_dependency.feature_gates.find((gate) => gate.id === 'entity_review_cards').satisfied,
-      true,
+      false,
     );
     assertVerificationContract(planResult.data.verification);
-    assert.equal(planResult.data.recommended_next_step.id, 'verify_stack');
+    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
+    assertActionContracts(planResult);
+    assertNoForbiddenCommands(planResult);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = makeRemoteFixture();
+  try {
+    const planResult = planGuiUpgrade({
+      repoRoot: fixture.work,
+      commandRunner: makeCliCommandRunner({ version: '1.4.4x' }),
+    });
+    assertCliDependencyContract(planResult.data.cli_dependency);
+    assert.equal(planResult.data.cli_dependency.status, 'unknown');
+    assert.equal(planResult.data.cli_dependency.cli_package_version, '1.4.4x');
+    assert.equal(planResult.data.cli_dependency.compatible, false);
+    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
+    assert.match(planResult.data.recommended_next_step.reason, /could not be parsed/);
     assertActionContracts(planResult);
     assertNoForbiddenCommands(planResult);
   } finally {

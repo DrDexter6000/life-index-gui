@@ -2,10 +2,12 @@
 
 import io
 import json
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
 import backend.routers.journals as journals_module
@@ -660,11 +662,66 @@ async def test_create_journal_with_attachment_stages_temp_file_and_passes_source
     assert "source_path" in attachment
     source_path = Path(attachment["source_path"])
     assert source_path.is_absolute()
-    assert source_path.name.endswith(".png")
+    assert source_path.name == "test-image.png"
 
     # The staged temp file must have been cleaned up after the request.
     assert not source_path.exists()
     assert not source_path.parent.exists()
+
+
+@pytest.mark.asyncio
+async def test_prepare_attachments_keeps_safe_basenames_in_unique_request_children():
+    """Staging strips path components but preserves each safe basename and bytes."""
+    contents = [
+        b"forward slash bytes",
+        b"backslash bytes",
+        b"first duplicate bytes",
+        b"second duplicate bytes",
+        b"unicode filename bytes",
+    ]
+    uploads = [
+        UploadFile(file=io.BytesIO(contents[0]), filename="../nested/forward.txt"),
+        UploadFile(file=io.BytesIO(contents[1]), filename=r"..\nested\backslash.txt"),
+        UploadFile(file=io.BytesIO(contents[2]), filename="duplicate.txt"),
+        UploadFile(file=io.BytesIO(contents[3]), filename="duplicate.txt"),
+        UploadFile(file=io.BytesIO(contents[4]), filename="照片.png"),
+    ]
+
+    with tempfile.TemporaryDirectory() as request_dir:
+        request_root = Path(request_dir).resolve()
+        attachments = await journals_module._prepare_attachments(uploads, request_dir)
+        source_paths = [Path(item["source_path"]) for item in attachments]
+
+        assert [path.name for path in source_paths] == [
+            "forward.txt",
+            "backslash.txt",
+            "duplicate.txt",
+            "duplicate.txt",
+            "照片.png",
+        ]
+        assert all(request_root in path.parents for path in source_paths)
+        assert all(path.parent.parent == request_root for path in source_paths)
+        assert len({path.parent for path in source_paths}) == len(source_paths)
+        assert [path.read_bytes() for path in source_paths] == contents
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "filename",
+    ["", ".", "..", "folder/..", r"folder\..", "unsafe\x00name.txt", "bad:name.txt"],
+)
+async def test_prepare_attachments_falls_back_for_unsafe_filenames(filename):
+    """Empty, traversal, NUL, and platform-unsafe names stage as a safe fallback."""
+    with tempfile.TemporaryDirectory() as request_dir:
+        request_root = Path(request_dir).resolve()
+        upload = UploadFile(file=io.BytesIO(b"safe fallback bytes"), filename=filename)
+
+        attachment = (await journals_module._prepare_attachments([upload], request_dir))[0]
+        source_path = Path(attachment["source_path"])
+
+        assert source_path.name == "attachment"
+        assert source_path.parent.parent == request_root
+        assert source_path.read_bytes() == b"safe fallback bytes"
 
 
 @pytest.mark.asyncio

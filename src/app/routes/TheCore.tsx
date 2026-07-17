@@ -56,6 +56,7 @@ export default function TheCore() {
   const [actionBarHeight, setActionBarHeight] = useState(99);
   const editLoadedRef = useRef<string | null>(null);
   const recoveredDraftScopeRef = useRef<string | null>(null);
+  const focusEditorAfterFirstUseActivationRef = useRef(false);
   const editId = searchParams.get('edit') ?? '';
   const isEditMode = Boolean(editId);
   const appendId = searchParams.get('append') ?? '';
@@ -71,7 +72,7 @@ export default function TheCore() {
   const { data: healthData, isError: healthUnavailable } = useHealthCheck();
   const smartCapabilityAvailable = !healthUnavailable && !isSmartCapabilityUnavailable(healthData);
 
-  const showEmptyState = !isEditMode && !statsLoading && stats?.totalJournals === 0;
+  const showEmptyState = !homeActivated && !isEditMode && !statsLoading && stats?.totalJournals === 0;
   const isWriteBusy =
     createJournal.isPending ||
     updateJournal.isPending ||
@@ -129,6 +130,16 @@ export default function TheCore() {
       exitEtherDissolve();
     }
   }, [homeActivated, isEtherDissolve, exitEtherDissolve]);
+
+  useEffect(() => {
+    if (!homeActivated || !focusEditorAfterFirstUseActivationRef.current) return;
+
+    const editor = document.getElementById('editor-textarea');
+    if (!editor) return;
+
+    editor.focus();
+    focusEditorAfterFirstUseActivationRef.current = false;
+  }, [homeActivated]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -232,16 +243,16 @@ export default function TheCore() {
     setHomeActivated(true);
   }, [appendId, appendJournal, setHomeActivated]);
 
+  const handleFirstUseWriteClick = () => {
+    focusEditorAfterFirstUseActivationRef.current = true;
+    setHomeActivated(true);
+  };
+
   // Show EmptyState when user has zero journals
   if (showEmptyState) {
     return (
       <Suspense fallback={null}>
-        <LazyEmptyState
-          onWriteClick={() => {
-            const el = document.querySelector<HTMLInputElement>('[data-editor-title]');
-            el?.focus();
-          }}
-        />
+        <LazyEmptyState onWriteClick={handleFirstUseWriteClick} />
       </Suspense>
     );
   }
@@ -604,6 +615,7 @@ export default function TheCore() {
               <MetadataSidebar
                 metadata={draft.metadata}
                 draftContent={draft.content}
+                draftScope={draftScope}
                 onUpdate={handleMetadataUpdate}
                 smartCapabilityAvailable={smartCapabilityAvailable}
               />

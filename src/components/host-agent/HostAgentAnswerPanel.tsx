@@ -28,13 +28,34 @@ function toneForMode(mode: string): BadgeTone {
   return MODE_TONES[mode] ?? 'neutral';
 }
 
-function journalIdFromEvidenceId(id: string): string {
-  return id.trim().replace(/^Journals\//i, '').replace(/\.md$/i, '');
+const SAFE_EVIDENCE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function journalIdFromEvidenceId(id: string): string | null {
+  if (typeof id !== 'string') return null;
+  const trimmed = id.trim();
+  if (!trimmed || trimmed !== id || /[\\?#]/.test(trimmed)) return null;
+  if (trimmed.startsWith('/') || trimmed.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(trimmed)) {
+    return null;
+  }
+
+  const withoutPrefix = trimmed.replace(/^Journals\//i, '');
+  const withoutExtension = withoutPrefix.replace(/\.md$/i, '');
+  const segments = withoutExtension.split('/');
+  if (
+    !withoutExtension
+    || segments.length === 0
+    || segments.some((segment) => !SAFE_EVIDENCE_SEGMENT.test(segment))
+  ) {
+    return null;
+  }
+  return segments.join('/');
 }
 
 function evidenceHref(id: string): string | null {
   const trimmed = journalIdFromEvidenceId(id);
-  return trimmed ? `/journal/${trimmed}` : null;
+  return trimmed
+    ? `/journal/${trimmed.split('/').map((segment) => encodeURIComponent(segment)).join('/')}`
+    : null;
 }
 
 function formatEvidenceDate(date: string): string {
@@ -212,8 +233,10 @@ export function HostAgentAnswerPanel({ response, onContinueSearch }: HostAgentAn
       const uniqueEvidence = Array.from(
         new Map(response.evidence.map((item) => [item.id, item])).values(),
       );
+      const safeEvidence = uniqueEvidence.filter((item) => journalIdFromEvidenceId(item.id) !== null);
+      if (safeEvidence.length === 0) return;
 
-      await Promise.all(uniqueEvidence.map(async (item) => {
+      await Promise.all(safeEvidence.map(async (item) => {
         const journalId = journalIdFromEvidenceId(item.id);
         if (!journalId) return;
 

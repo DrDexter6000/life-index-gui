@@ -350,7 +350,7 @@ describe('HealthCenter', () => {
     expect(card).toHaveTextContent('星轨 AI+ 连接');
     expect(card).toHaveTextContent('未连接');
     expect(card).toHaveTextContent('智能元数据');
-    expect(card).toHaveTextContent('智能搜索');
+    expect(card).toHaveTextContent('关键词搜索');
     expect(within(card).getByRole('link', { name: /如何连接宿主 agent/i })).toHaveAttribute('href', '/maintenance/host-agent');
   });
 

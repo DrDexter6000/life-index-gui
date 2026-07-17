@@ -1,9 +1,7 @@
-import { type ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router';
-import App from './App';
+import { createMemoryRouter } from 'react-router';
+import App, { appRoutes } from './App';
 
 const IndexTreeDiagnosticsMock = () => (
   <div data-testid="index-tree-diagnostics-route-mock">Index Tree Diagnostics Route</div>
@@ -26,6 +24,10 @@ vi.mock('@/app/routes/HostAgentGuide', () => ({
 vi.mock('@/app/routes/Recall', () => ({
   __esModule: true,
   default: () => <div>Recall</div>,
+}));
+vi.mock('@/app/routes/TheCore', () => ({
+  __esModule: true,
+  default: () => <div>TheCore</div>,
 }));
 vi.mock('@/app/routes/Archives', () => ({
   __esModule: true,
@@ -59,6 +61,10 @@ vi.mock('@/app/routes/ImportWorkflow', () => ({
   __esModule: true,
   default: () => <div>ImportWorkflow</div>,
 }));
+vi.mock('@/app/routes/PublicLinkExchange', () => ({
+  __esModule: true,
+  default: () => <div>PublicLinkExchange</div>,
+}));
 
 vi.mock('@/components/maintenance/DiagnosticCenterLayout', async () => {
   const actual = await vi.importActual<typeof import('react-router')>('react-router');
@@ -68,24 +74,10 @@ vi.mock('@/components/maintenance/DiagnosticCenterLayout', async () => {
   };
 });
 
-vi.mock('react-router', async () => {
-  const actual = await vi.importActual('react-router');
-  return {
-    ...actual,
-    BrowserRouter: ({ children }: { children: ReactNode }) => <>{children}</>,
-  };
-});
-
 function renderAppAtRoute(route: string) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const router = createMemoryRouter(appRoutes, { initialEntries: [route] });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[route]}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
+    <App router={router} />,
   );
 }
 

@@ -17,7 +17,7 @@ def test_version_endpoint_exposes_single_compatibility_source():
             "status": "ok",
             "cli_available": True,
             "compatible": True,
-            "package_version": "1.3.7",
+            "package_version": "1.4.5",
             "repo_version": "cli-main-abc123",
             "minimum_supported_version": "1.2.1",
             "cli_minimum_version": "1.2.1",
@@ -35,7 +35,7 @@ def test_version_endpoint_exposes_single_compatibility_source():
     payload = response.json()
     assert payload["ok"] is True
     assert payload["data"]["gui_version"]
-    assert payload["data"]["cli_minimum_version"] == "1.3.7"
+    assert payload["data"]["cli_minimum_version"] == "1.4.5"
     assert payload["data"]["repo_version"] == "cli-main-abc123"
     assert payload["data"]["compatible"] is True
 
@@ -64,5 +64,5 @@ def test_health_endpoint_carries_version_aliases_for_agents():
     assert response.status_code == 200
     payload = response.json()
     assert payload["data"]["gui_version"]
-    assert payload["data"]["cli_minimum_version"] == "1.3.7"
-    assert payload["data"]["minimum_supported_version"] == "1.3.7"
+    assert payload["data"]["cli_minimum_version"] == "1.4.5"
+    assert payload["data"]["minimum_supported_version"] == "1.4.5"

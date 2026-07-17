@@ -62,6 +62,7 @@ describe('dev dependency NODE_ENV guard', () => {
       'test:watch',
       'verify-stack',
       'smoke:e2e',
+      'smoke:d3',
     ]) {
       const prescript = scripts[`pre${scriptName}`];
       expect(prescript, `pre${scriptName}`).toContain('node scripts/require-dev-env.mjs');

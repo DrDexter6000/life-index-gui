@@ -12,9 +12,9 @@ import { JournalCard } from '@/components/celestial/JournalCard';
 import { CelestialLoader } from '@/components/celestial/CelestialLoader';
 import { HostAgentAnswerPanel } from '@/components/host-agent/HostAgentAnswerPanel';
 import { HostAgentStreamPanel } from '@/components/host-agent/HostAgentStreamPanel';
-import type { LaneStatus } from './recallWorkbenchState';
 
 type RecallTab = 'keyword' | 'agent';
+type LaneStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 type EntityExpansionEntry = EntityExpansion['expansions'][number];
 
 function formatEntityExpansionTargets(value: EntityExpansionEntry['to'] | string | unknown): string {
@@ -358,6 +358,18 @@ export default function Recall() {
         >
           {t('hostAgentQuerySubmit')}
         </button>
+        {(hostStream.status === 'connecting' || hostStream.status === 'streaming') && (
+          <button
+            type="button"
+            aria-label={t('hostAgentQueryCancel')}
+            onClick={hostStream.cancel}
+            className="shrink-0 cursor-pointer whitespace-nowrap rounded-full border border-white/[0.12] px-3 py-2 text-xs font-medium text-[var(--color-muted)] transition-all hover:border-white/[0.24] sm:px-4"
+            style={{ fontFamily: 'var(--font-control)', letterSpacing: '0.08em', textTransform: 'uppercase' }}
+            data-testid="agent-cancel"
+          >
+            {t('hostAgentQueryCancel')}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -417,7 +429,7 @@ export default function Recall() {
         />
         <button
           type="button"
-          aria-label={t('smartSearchSubmit')}
+          aria-label={t('searchSubmit')}
           onClick={handleSubmit}
           disabled={!inputValue.trim()}
           className="shrink-0 cursor-pointer whitespace-nowrap rounded-full px-3 py-2 text-[0.75rem] font-medium transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
@@ -430,7 +442,7 @@ export default function Recall() {
             textTransform: 'uppercase',
           }}
         >
-          {t('smartSearchSubmit')}
+          {t('searchSubmit')}
         </button>
       </div>
     </div>

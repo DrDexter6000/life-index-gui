@@ -312,10 +312,11 @@ export function useIndexCacheDryRun() {
 /**
  * Hook for fetching entity graph statistics.
  */
-export function useEntityStats() {
+export function useEntityStats(enabled = true) {
   return useQuery({
     queryKey: entityKeys.stats(),
     queryFn: () => entityAPI.getStats(),
+    enabled,
     staleTime: 60 * 1000,
     retry: 1,
   });
@@ -324,10 +325,11 @@ export function useEntityStats() {
 /**
  * Hook for listing entities with optional type filter.
  */
-export function useEntityList(type?: string) {
+export function useEntityList(type?: string, enabled = true) {
   return useQuery({
     queryKey: entityKeys.list(type),
     queryFn: () => entityAPI.listEntities(type),
+    enabled,
     staleTime: 60 * 1000,
     retry: 1,
   });
@@ -336,10 +338,11 @@ export function useEntityList(type?: string) {
 /**
  * Hook for fetching entity graph integrity check.
  */
-export function useEntityCheck() {
+export function useEntityCheck(enabled = true) {
   return useQuery({
     queryKey: entityKeys.check(),
     queryFn: () => entityAPI.getCheck(),
+    enabled,
     staleTime: 60 * 1000,
     retry: 1,
   });
@@ -348,10 +351,11 @@ export function useEntityCheck() {
 /**
  * Hook for fetching entity quality audit findings.
  */
-export function useEntityAudit() {
+export function useEntityAudit(enabled = true) {
   return useQuery({
     queryKey: entityKeys.audit(),
     queryFn: () => entityAPI.getAudit(),
+    enabled,
     staleTime: 60 * 1000,
     retry: 1,
   });
@@ -360,10 +364,11 @@ export function useEntityAudit() {
 /**
  * Hook for fetching entity review/curation queue.
  */
-export function useEntityReview() {
+export function useEntityReview(enabled = true) {
   return useQuery({
     queryKey: entityKeys.review(),
     queryFn: () => entityAPI.getReview(),
+    enabled,
     staleTime: 60 * 1000,
     retry: 1,
   });
@@ -372,10 +377,11 @@ export function useEntityReview() {
 /**
  * Hook for fetching capped candidate relationship edges.
  */
-export function useEntityCandidateEdges(limit?: number) {
+export function useEntityCandidateEdges(limit?: number, enabled = true) {
   return useQuery({
     queryKey: entityKeys.candidateEdges(limit),
     queryFn: () => entityAPI.getCandidateEdges(limit),
+    enabled,
     staleTime: 60 * 1000,
     retry: 1,
   });

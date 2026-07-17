@@ -39,6 +39,15 @@ const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf
 assert.equal(packageJson.scripts['sync-skill'], 'node scripts/sync-skill.mjs');
 
 {
+  const result = spawnSync(process.execPath, [syncSkillScript, '--help'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--host-skill-dir <path>/);
+}
+
+{
   const home = makeHome();
   try {
     mkdirSync(join(home, '.hermes', 'skills'), { recursive: true });
@@ -132,6 +141,59 @@ assert.equal(packageJson.scripts['sync-skill'], 'node scripts/sync-skill.mjs');
   try {
     mkdirSync(join(home, '.hermes', 'skills'), { recursive: true });
     mkdirSync(join(home, '.claude', 'skills'), { recursive: true });
+    const explicitTargetRoot = join(home, '.claude', 'skills');
+
+    const result = runSyncSkill(home, ['--host-skill-dir', explicitTargetRoot]);
+    assert.equal(result.status, 0, result.stderr);
+    const json = parseJson(result);
+    assert.equal(json.delivered, true);
+    assert.equal(json.action, 'created');
+    assert.equal(json.target, join(explicitTargetRoot, 'life-index-gui', 'SKILL.md'));
+    assert.equal(existsSync(json.target), true);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+{
+  const home = makeHome();
+  try {
+    const missingTargetRoot = join(home, '.hermes', 'skills');
+    const result = runSyncSkill(home, ['--host-skill-dir', missingTargetRoot]);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, '');
+    const json = parseJson(result);
+    assert.equal(json.delivered, false);
+    assert.equal(json.reason, 'host_skill_directory_invalid');
+    assert.match(json.message, /Host skill directory does not exist or is not a directory/);
+    assert.equal(json.host_skill_dir, missingTargetRoot);
+    assert.equal(existsSync(missingTargetRoot), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+{
+  const home = makeHome();
+  try {
+    const fileTargetRoot = join(home, 'not-a-directory');
+    writeFileSync(fileTargetRoot, 'not a skill registry');
+    const result = runSyncSkill(home, ['--host-skill-dir', fileTargetRoot]);
+    assert.equal(result.status, 1);
+    const json = parseJson(result);
+    assert.equal(json.delivered, false);
+    assert.equal(json.reason, 'host_skill_directory_invalid');
+    assert.equal(json.host_skill_dir, fileTargetRoot);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+{
+  const home = makeHome();
+  try {
+    mkdirSync(join(home, '.hermes', 'skills'), { recursive: true });
+    mkdirSync(join(home, '.claude', 'skills'), { recursive: true });
 
     const result = runSyncSkill(home);
     assert.equal(result.status, 1);
@@ -139,6 +201,8 @@ assert.equal(packageJson.scripts['sync-skill'], 'node scripts/sync-skill.mjs');
     assert.equal(json.delivered, false);
     assert.equal(json.reason, 'ambiguous_host_skill_directories');
     assert.equal(json.candidates.length, 2);
+    assert.match(json.hint, /npm run sync-skill -- --host-skill-dir/);
+    assert.match(json.hint, /\.hermes/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -156,6 +220,8 @@ assert.equal(packageJson.scripts['sync-skill'], 'node scripts/sync-skill.mjs');
     assert.equal(json.delivered, false);
     assert.equal(json.reason, 'ambiguous_existing_skill_targets');
     assert.equal(json.candidates.length, 2);
+    assert.match(json.hint, /npm run sync-skill -- --host-skill-dir/);
+    assert.match(json.hint, /\.hermes/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

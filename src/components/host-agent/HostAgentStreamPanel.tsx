@@ -22,6 +22,7 @@ const PHASE_LABEL_KEYS: Record<HostAgentStreamPhase, string> = {
   answering: 'hostAgentStreamStageAnswer',
   complete: 'hostAgentStreamFinalSummary',
   error: 'hostAgentStreamErrorTitle',
+  cancelled: 'hostAgentStreamCancelledTitle',
 };
 
 export function HostAgentStreamPanel({
@@ -69,6 +70,24 @@ export function HostAgentStreamPanel({
         </h4>
         <p className="text-xs text-[var(--color-secondary)]">
           {error?.message || t('hostAgentStreamErrorBody')}
+        </p>
+      </div>
+    );
+  }
+
+  if (status === 'cancelled') {
+    return (
+      <div
+        className="rounded-3xl p-5 text-center"
+        data-testid="host-agent-stream-cancelled"
+        style={{ border: '1px solid rgba(255,255,255,0.10)', background: 'var(--color-ether-surface-ghost)' }}
+      >
+        <span className="material-symbols-outlined mb-3 block text-3xl text-[var(--color-muted)]">stop_circle</span>
+        <h4 className="mb-2 text-sm text-[var(--color-primary)]" style={{ fontFamily: 'var(--font-order)' }}>
+          {t('hostAgentStreamCancelledTitle')}
+        </h4>
+        <p className="text-xs text-[var(--color-secondary)]">
+          {t('hostAgentStreamCancelledBody')}
         </p>
       </div>
     );

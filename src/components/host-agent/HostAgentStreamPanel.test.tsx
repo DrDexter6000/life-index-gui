@@ -22,6 +22,8 @@ vi.mock('@/hooks/useTranslation', () => ({
         hostAgentThinkingToggle: 'Thinking process',
         hostAgentStreamErrorTitle: 'Stream failed',
         hostAgentStreamErrorBody: 'The Host Agent could not complete this request.',
+        hostAgentStreamCancelledTitle: 'Stream cancelled',
+        hostAgentStreamCancelledBody: 'The Host Agent request was cancelled before it completed.',
       };
       return map[key] ?? key;
     },
@@ -70,5 +72,16 @@ describe('HostAgentStreamPanel', () => {
     expect(within(panel).getByText('Searching evidence')).toBeInTheDocument();
     expect(within(panel).getByText('Found 5 evidence')).toBeInTheDocument();
     expect(screen.getByTestId('host-agent-stream-delta')).toHaveTextContent('I have found the relevant entries.');
+  });
+
+  it('shows cancellation as a terminal neutral state', () => {
+    renderPanel({
+      status: 'cancelled',
+      phase: 'cancelled',
+      error: new Error('Host Agent request cancelled.'),
+    });
+
+    expect(screen.getByTestId('host-agent-stream-cancelled')).toHaveTextContent('Stream cancelled');
+    expect(screen.queryByTestId('host-agent-stream-panel')).not.toBeInTheDocument();
   });
 });

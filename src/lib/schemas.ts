@@ -79,6 +79,52 @@ export const HeatmapDaySchema = z.object({
   level: z.number(),
 });
 
+// ── GUI-owned Archives dashboard v1 ───────────────────────────────────────
+
+const LocalMonthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+const LocalDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const DashboardPeriodSchema = z.object({
+  selected_month: LocalMonthSchema,
+  today: LocalDaySchema,
+  current_month: LocalMonthSchema,
+}).strict();
+
+export const DashboardTotalsSchema = z.object({
+  journal_count: z.number().int().nonnegative().nullable(),
+  month_entry_count: z.number().int().nonnegative().nullable(),
+  month_active_day_count: z.number().int().nonnegative().nullable(),
+  today_entry_count: z.number().int().nonnegative().nullable(),
+}).strict();
+
+export const DashboardFacetValueSchema = z.object({
+  value: z.string(),
+  count: z.number().int().nonnegative(),
+}).strict();
+
+export const DashboardDailyActivitySchema = z.object({
+  date: LocalDaySchema,
+  count: z.number().int().nonnegative(),
+}).strict();
+
+export const DashboardWarningSchema = z.object({
+  source: z.string(),
+  code: z.string(),
+  message: z.string(),
+}).strict();
+
+export const DashboardResponseSchema = z.object({
+  period: DashboardPeriodSchema,
+  totals: DashboardTotalsSchema,
+  daily_activity: z.array(DashboardDailyActivitySchema),
+  facets: z.object({
+    topics: z.array(DashboardFacetValueSchema),
+    tags: z.array(DashboardFacetValueSchema),
+    people: z.array(DashboardFacetValueSchema),
+  }).strict(),
+  warnings: z.array(DashboardWarningSchema),
+}).strict();
+
 // ── Search schema ──────────────────────────────────────────────────────────
 
 const EntityExpansionTargetsSchema = z.union([
@@ -398,12 +444,23 @@ export const HostAgentMetadataFieldSchema = z.object({
   evidence_spans: z.array(z.string()).default([]),
 }).passthrough();
 
+const HostAgentMetadataFieldsSchema = z.object({
+  title: HostAgentMetadataFieldSchema.optional(),
+  abstract: HostAgentMetadataFieldSchema.optional(),
+  project: HostAgentMetadataFieldSchema.optional(),
+  topics: HostAgentMetadataFieldSchema.optional(),
+  moods: HostAgentMetadataFieldSchema.optional(),
+  people: HostAgentMetadataFieldSchema.optional(),
+  tags: HostAgentMetadataFieldSchema.optional(),
+  links: HostAgentMetadataFieldSchema.optional(),
+}).strict();
+
 export const HostAgentMetadataProposalSchema = z.object({
-  schema_version: z.string().default('gui.host_agent.metadata_proposal.v1'),
+  schema_version: z.literal('gui.host_agent.metadata_proposal.v1').default('gui.host_agent.metadata_proposal.v1'),
   request_id: z.string().nullable().optional(),
   mode: z.string().min(1),
   reason: z.string().nullable().optional(),
-  fields: z.record(z.string(), HostAgentMetadataFieldSchema).default({}),
+  fields: HostAgentMetadataFieldsSchema.default({}),
   warnings: z.array(z.string()).default([]),
   policy: z.record(z.string(), z.unknown()).optional(),
 }).passthrough();

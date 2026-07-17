@@ -4,6 +4,7 @@ import {
   JournalSummarySchema,
   JournalDetailSchema,
   DashboardStatsSchema,
+  DashboardResponseSchema,
   TopicDistributionSchema,
   MoodFrequencySchema,
   HeatmapDaySchema,
@@ -104,7 +105,16 @@ function parseSseFrame<T>(frame: string, schema: z.ZodType<T>): T | null {
   }
   if (dataLines.length === 0) return null;
 
-  const parsedData = JSON.parse(dataLines.join('\n'));
+  let parsedData: unknown;
+  try {
+    parsedData = JSON.parse(dataLines.join('\n'));
+  } catch {
+    throw new APIClientError(
+      'Host Agent returned a malformed stream event.',
+      'HOST_AGENT_MALFORMED_EVENT',
+      200,
+    );
+  }
   return parseData(schema, {
     type: eventType,
     data: parsedData,
@@ -129,20 +139,29 @@ async function* parseSseStream<T>(response: Response, schema: z.ZodType<T>): Asy
     return parts;
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    for (const frame of drainFrames()) {
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      for (const frame of drainFrames()) {
+        const event = parseSseFrame(frame, schema);
+        if (event) yield event;
+      }
+    }
+
+    buffer += decoder.decode();
+    for (const frame of drainFrames(true)) {
       const event = parseSseFrame(frame, schema);
       if (event) yield event;
     }
-  }
-
-  buffer += decoder.decode();
-  for (const frame of drainFrames(true)) {
-    const event = parseSseFrame(frame, schema);
-    if (event) yield event;
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // The fetch body may already be closed by an abort or normal EOF.
+    }
+    reader.releaseLock?.();
   }
 }
 
@@ -331,33 +350,20 @@ export const journalAPI = {
     };
   },
 
-  /** Smart-search via CLI deterministic scaffold/evidence */
-  smartSearch: async (params: SmartSearchParams): Promise<SmartSearchResult> => {
-    const raw = await apiClient.post('/smart-search', params);
-    const data = parseData(
-      z.object({
-        scaffold: z.array(z.record(z.string(), z.unknown())).default([]),
-        evidence: z.array(z.record(z.string(), z.unknown())).default([]),
-        provenance: z.string().default('deterministic'),
-        meta: z.record(z.string(), z.unknown()).optional(),
-      }),
-      raw,
-    );
-    const evidence = data.evidence.map((item) =>
-      addExcerpt(parseData(JournalSummarySchema, item)),
-    );
-    return {
-      scaffold: data.scaffold,
-      evidence,
-      provenance: data.provenance,
-      meta: data.meta,
-    };
-  },
 };
 
 // ── Dashboard API ──────────────────────────────────────────────────────────
 
 export const dashboardAPI = {
+  getDashboard: async (options: DashboardRequest = {}): Promise<DashboardResponse> => {
+    const params = new URLSearchParams();
+    if (options.month) params.set('month', options.month);
+    if (options.top !== undefined) params.set('top', String(options.top));
+    const query = params.toString();
+    const raw = await apiClient.get(`/dashboard${query ? `?${query}` : ''}`);
+    return parseData(DashboardResponseSchema, raw);
+  },
+
   getStats: async (): Promise<DashboardStats> => {
     const raw = await apiClient.get('/stats');
     return parseData(DashboardStatsSchema, raw);
@@ -515,17 +521,6 @@ export interface SearchResponse {
 
 export type EntityExpansion = z.infer<typeof EntityExpansionSchema>;
 
-export interface SmartSearchResult {
-  scaffold: Array<{ step?: string; description?: string }>;
-  evidence: JournalSummary[];
-  provenance: string;
-  meta?: Record<string, unknown>;
-}
-
-export interface SmartSearchParams {
-  query: string;
-}
-
 export interface DashboardStats {
   totalJournals: number;
   totalWords: number;
@@ -533,6 +528,15 @@ export interface DashboardStats {
   streakDays: number;
   avgWordsPerDay: number;
 }
+
+export interface DashboardRequest {
+  month?: string;
+  top?: number;
+}
+
+export type DashboardResponse = z.infer<typeof DashboardResponseSchema>;
+export type DashboardDailyActivity = DashboardResponse['daily_activity'][number];
+export type DashboardFacetValue = DashboardResponse['facets']['topics'][number];
 
 export interface TopicDistribution {
   name: string;

@@ -8,7 +8,7 @@ import {
 } from '@/lib/api-client';
 import { getHostAgentCapability } from '@/lib/health-status';
 
-export type HostAgentStreamStatus = 'idle' | 'connecting' | 'streaming' | 'complete' | 'error';
+export type HostAgentStreamStatus = 'idle' | 'connecting' | 'streaming' | 'complete' | 'error' | 'cancelled';
 export type HostAgentStreamPhase =
   | 'idle'
   | 'connecting'
@@ -17,7 +17,19 @@ export type HostAgentStreamPhase =
   | 'searching'
   | 'answering'
   | 'complete'
-  | 'error';
+  | 'error'
+  | 'cancelled';
+
+export const DEFAULT_HOST_AGENT_STREAM_TIMEOUT_MS = 600_000;
+
+type HostAgentTerminalState = 'final' | 'error' | 'cancelled' | 'timeout';
+
+interface ActiveHostAgentRequest {
+  sequence: number;
+  turnId: string;
+  controller: AbortController;
+  terminal: HostAgentTerminalState | null;
+}
 
 export interface HostAgentConversationTurn {
   id: string;
@@ -56,6 +68,7 @@ export const hostAgentKeys = {
 export function mapHostAgentStreamPhase(rawPhase?: string | null): HostAgentStreamPhase {
   const normalized = (rawPhase ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (!normalized) return 'planning';
+  if (normalized.includes('cancel')) return 'cancelled';
   if (normalized.includes('error') || normalized.includes('fail')) return 'error';
   if (normalized.includes('complete') || normalized.includes('done')) return 'complete';
   if (normalized.includes('connect')) return 'connecting';
@@ -106,16 +119,43 @@ export function useHostAgentStream() {
   const [finalResponse, setFinalResponse] = useState<HostAgentQueryResponse | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [events, setEvents] = useState<HostAgentStreamEvent[]>([]);
-  const abortRef = useRef<AbortController | null>(null);
+  const activeRequestRef = useRef<ActiveHostAgentRequest | null>(null);
+  const requestSequenceRef = useRef(0);
 
   const start = useCallback(async (rawQuery: string) => {
     const query = rawQuery.trim();
     if (!query) return;
 
-    abortRef.current?.abort();
+    const previous = activeRequestRef.current;
+    if (previous && previous.terminal === null) {
+      previous.terminal = 'cancelled';
+      previous.controller.abort();
+      const cancellationError = new Error('Host Agent request cancelled by a newer request.');
+      setTurns((current) => current.map((turn) => (
+        turn.id === previous.turnId
+          ? {
+            ...turn,
+            status: 'cancelled',
+            phase: 'cancelled',
+            error: cancellationError,
+          }
+          : turn
+      )));
+    } else {
+      previous?.controller.abort();
+    }
+
+    requestSequenceRef.current += 1;
+    const sequence = requestSequenceRef.current;
     const controller = new AbortController();
-    abortRef.current = controller;
     const turnId = createTurnId();
+    const request: ActiveHostAgentRequest = {
+      sequence,
+      turnId,
+      controller,
+      terminal: null,
+    };
+    activeRequestRef.current = request;
     const nextTurn: HostAgentConversationTurn = {
       id: turnId,
       query,
@@ -130,9 +170,45 @@ export function useHostAgentStream() {
     };
 
     const updateTurn = (patch: Partial<HostAgentConversationTurn>) => {
+      if (activeRequestRef.current?.sequence !== sequence || controller.signal.aborted) return;
       setTurns((current) => current.map((turn) => (
         turn.id === turnId ? { ...turn, ...patch } : turn
       )));
+    };
+
+    const isCurrent = () => (
+      activeRequestRef.current?.sequence === sequence && !controller.signal.aborted
+    );
+
+    const terminalErrorForEvent = (data: unknown): Error => {
+      if (data && typeof data === 'object') {
+        const eventData = data as { code?: unknown; error?: { code?: unknown } };
+        const code = typeof eventData.code === 'string'
+          ? eventData.code
+          : typeof eventData.error?.code === 'string'
+            ? eventData.error.code
+            : '';
+        if (code && /^[A-Za-z0-9_.:-]{1,80}$/.test(code)) {
+          return new Error(`Host Agent stream error: ${code}`);
+        }
+      }
+      return new Error('Host Agent stream error.');
+    };
+
+    const finishWithError = (terminal: 'error' | 'cancelled' | 'timeout', nextError: Error) => {
+      if (!isCurrent() || request.terminal !== null) return;
+      request.terminal = terminal;
+      setError(nextError);
+      setFinalResponse(null);
+      setPhase(terminal === 'cancelled' ? 'cancelled' : 'error');
+      setStatus(terminal === 'cancelled' ? 'cancelled' : 'error');
+      updateTurn({
+        status: terminal === 'cancelled' ? 'cancelled' : 'error',
+        phase: terminal === 'cancelled' ? 'cancelled' : 'error',
+        error: nextError,
+        finalResponse: null,
+        events: collected,
+      });
     };
 
     setStatus('connecting');
@@ -147,12 +223,21 @@ export function useHostAgentStream() {
 
     const collected: HostAgentStreamEvent[] = [];
     let accumulatedDeltaText = '';
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     try {
+      timeoutId = globalThis.setTimeout(() => {
+        if (request.terminal === null && isCurrent()) {
+          finishWithError('timeout', new Error('Host Agent stream timed out before a final response.'));
+          controller.abort();
+        }
+      }, DEFAULT_HOST_AGENT_STREAM_TIMEOUT_MS);
+
       for await (const event of hostAgentAPI.stream(query, {
         signal: controller.signal,
         conversationId,
       })) {
+        if (!isCurrent() || request.terminal !== null) break;
         collected.push(event);
         setEvents([...collected]);
         updateTurn({ events: [...collected] });
@@ -184,44 +269,76 @@ export function useHostAgentStream() {
           updateTurn({ status: 'streaming', phase: 'answering', deltaText: accumulatedDeltaText });
         }
 
+        if (event.type === 'error') {
+          finishWithError('error', terminalErrorForEvent(event.data));
+          break;
+        }
+
         if (event.type === 'final') {
+          request.terminal = 'final';
           setFinalResponse(event.data);
           setEvidencePreview(event.data.evidence);
+          setPhase('complete');
+          setStatus('complete');
           updateTurn({
+            status: 'complete',
+            phase: 'complete',
             finalResponse: event.data,
             evidencePreview: event.data.evidence,
+            events: [...collected],
           });
+          break;
         }
       }
 
-      setEvents(collected);
-      setPhase('complete');
-      setStatus('complete');
-      updateTurn({
-        status: 'complete',
-        phase: 'complete',
-        events: collected,
-      });
+      if (request.terminal === null && isCurrent()) {
+        finishWithError('error', new Error('Host Agent stream ended before a final response.'));
+      }
     } catch (err) {
-      if (controller.signal.aborted) return;
+      if (!isCurrent() || request.terminal !== null) return;
       const error = err instanceof Error ? err : new Error(String(err));
-      setError(error);
-      setFinalResponse(null);
-      setPhase('error');
-      setStatus('error');
-      updateTurn({
-        status: 'error',
-        phase: 'error',
-        error,
-        finalResponse: null,
-        events: collected,
-      });
+      if (controller.signal.aborted) {
+        finishWithError('cancelled', new Error('Host Agent request cancelled.'));
+      } else {
+        finishWithError('error', error);
+      }
+    } finally {
+      if (timeoutId !== null) globalThis.clearTimeout(timeoutId);
+      if (activeRequestRef.current?.sequence === sequence) {
+        activeRequestRef.current = null;
+      }
     }
   }, [conversationId]);
 
+  const cancel = useCallback(() => {
+    const active = activeRequestRef.current;
+    if (!active || active.terminal !== null) return;
+    active.terminal = 'cancelled';
+    active.controller.abort();
+    requestSequenceRef.current += 1;
+    activeRequestRef.current = null;
+    const cancellationError = new Error('Host Agent request cancelled.');
+    setError(cancellationError);
+    setFinalResponse(null);
+    setPhase('cancelled');
+    setStatus('cancelled');
+    setTurns((current) => current.map((turn) => (
+      turn.id === active.turnId
+        ? {
+          ...turn,
+          status: 'cancelled',
+          phase: 'cancelled',
+          error: cancellationError,
+          finalResponse: null,
+        }
+        : turn
+    )));
+  }, []);
+
   const reset = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+    activeRequestRef.current?.controller.abort();
+    requestSequenceRef.current += 1;
+    activeRequestRef.current = null;
     setConversationId(createConversationId());
     setTurns([]);
     setStatus('idle');
@@ -235,7 +352,9 @@ export function useHostAgentStream() {
   }, []);
 
   useEffect(() => () => {
-    abortRef.current?.abort();
+    activeRequestRef.current?.controller.abort();
+    requestSequenceRef.current += 1;
+    activeRequestRef.current = null;
   }, []);
 
   return {
@@ -251,6 +370,7 @@ export function useHostAgentStream() {
     error,
     events,
     start,
+    cancel,
     reset,
   };
 }

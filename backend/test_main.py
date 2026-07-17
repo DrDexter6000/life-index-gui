@@ -1,13 +1,12 @@
 """Tests for application-level API boundaries."""
 
 import base64
-from io import BytesIO
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
-from PIL import Image
+import pytest
 
 from backend.adapter.cli_adapter import CLIError
 from backend.main import app
@@ -28,6 +27,7 @@ def test_attachment_endpoint_prefers_cli_media_contract_for_preview_variant():
                     "success": True,
                     "schema_version": "m17.attachment-media.v1",
                     "data": {
+                        "size": len(content),
                         "content_type": "image/jpeg",
                         "headers": {
                             "Content-Type": "image/jpeg",
@@ -42,6 +42,7 @@ def test_attachment_endpoint_prefers_cli_media_contract_for_preview_variant():
                         },
                         "stream": {"status_code": 200},
                     },
+                    "error": None,
                 }
             ),
             encoding="utf-8",
@@ -90,6 +91,7 @@ def test_attachment_endpoint_uses_cli_media_contract_for_original_range():
                     "success": True,
                     "schema_version": "m17.attachment-media.v1",
                     "data": {
+                        "size": len(content),
                         "content_type": "video/mp4",
                         "headers": {
                             "Content-Type": "video/mp4",
@@ -100,6 +102,7 @@ def test_attachment_endpoint_uses_cli_media_contract_for_original_range():
                         },
                         "stream": {"status_code": 206},
                     },
+                    "error": None,
                 }
             ),
             encoding="utf-8",
@@ -134,216 +137,253 @@ def test_attachment_endpoint_uses_cli_media_contract_for_original_range():
     assert args[args.index("--range") + 1] == "bytes=0-1023"
 
 
-def test_attachment_endpoint_falls_back_to_cli_export_when_media_contract_unavailable():
-    """Older CLI installs keep working until the raw media contract lands locally."""
-    content = b"legacy export bytes"
+def test_attachment_endpoint_maps_structured_media_metadata_error():
+    """A valid m17 error sidecar is mapped without consulting legacy JSON export."""
+    mock_adapter = MagicMock()
+
+    async def run_bytes(args):
+        metadata_path = Path(args[args.index("--metadata-output") + 1])
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "success": False,
+                    "schema_version": "m17.attachment-media.v1",
+                    "data": None,
+                    "error": {
+                        "code": "ATTACHMENT_NOT_FOUND",
+                        "message": "missing",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return b""
+
+    mock_adapter.run_bytes = AsyncMock(side_effect=run_bytes)
+    mock_adapter.run_json = AsyncMock()
+
+    with patch("backend.main.CLIAdapter", return_value=mock_adapter):
+        response = client.get("/api/attachments/2026/05/missing.png")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "ATTACHMENT_NOT_FOUND"
+    mock_adapter.run_json.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "error",
+        "missing_headers",
+        "bad_status",
+        "missing_content",
+        "content_length_mismatch",
+        "content_length_non_decimal",
+        "unsupported_status",
+        "partial_missing_range",
+        "partial_bad_range",
+        "partial_missing_accept_ranges",
+        "partial_bad_accept_ranges",
+        "full_content_range",
+        "header_crlf",
+    ],
+)
+def test_attachment_endpoint_rejects_incomplete_media_success_sidecars(case):
+    """Success envelopes must carry exact relay metadata and error: null."""
+    mock_adapter = MagicMock()
+    content = b"media"
+
+    async def run_bytes(args):
+        metadata_path = Path(args[args.index("--metadata-output") + 1])
+        data = {
+            "size": len(content),
+            "content_type": "image/jpeg",
+            "headers": {
+                "Content-Type": "image/jpeg",
+                "Content-Length": str(len(content)),
+            },
+            "stream": {"status_code": 200},
+        }
+        error = None
+        if case == "error":
+            error = {"code": "ATTACHMENT_NOT_FOUND", "message": "missing"}
+        elif case == "missing_headers":
+            data.pop("headers")
+        elif case == "bad_status":
+            data["stream"]["status_code"] = "200"
+        elif case == "missing_content":
+            data.pop("content_type")
+            data.pop("size")
+        elif case == "content_length_mismatch":
+            data["headers"]["Content-Length"] = "99"
+        elif case == "content_length_non_decimal":
+            data["headers"]["Content-Length"] = "five"
+        elif case == "unsupported_status":
+            data["stream"]["status_code"] = 201
+        elif case == "partial_missing_range":
+            data["stream"]["status_code"] = 206
+            data["headers"]["Accept-Ranges"] = "bytes"
+        elif case == "partial_bad_range":
+            data["stream"]["status_code"] = 206
+            data["headers"]["Accept-Ranges"] = "bytes"
+            data["headers"]["Content-Range"] = "bytes 0-9/10"
+        elif case == "partial_missing_accept_ranges":
+            data["stream"]["status_code"] = 206
+            data["headers"]["Content-Range"] = "bytes 0-4/10"
+        elif case == "partial_bad_accept_ranges":
+            data["stream"]["status_code"] = 206
+            data["headers"]["Accept-Ranges"] = "none"
+            data["headers"]["Content-Range"] = "bytes 0-4/10"
+        elif case == "full_content_range":
+            data["headers"]["Content-Range"] = "bytes 0-4/5"
+        elif case == "header_crlf":
+            data["headers"]["ETag"] = '"safe"\r\nX-Evil: yes'
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "success": True,
+                    "schema_version": "m17.attachment-media.v1",
+                    "data": data,
+                    "error": error,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return content
+
+    mock_adapter.run_bytes = AsyncMock(side_effect=run_bytes)
+    mock_adapter.run_json = AsyncMock()
+
+    with patch("backend.main.CLIAdapter", return_value=mock_adapter):
+        response = client.get(f"/api/attachments/2026/05/invalid-{case}.jpg")
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "INVALID_CLI_ATTACHMENT_PAYLOAD"
+    mock_adapter.run_json.assert_not_awaited()
+
+
+def test_attachment_contract_does_not_fallback_from_stderr_wording():
+    """Structured media error codes win even when messages contain legacy wording."""
+    mock_adapter = MagicMock()
+    structured_errors = [
+        (
+            "ATTACHMENT_UNSUPPORTED_MEDIA",
+            502,
+        ),
+        (
+            "ATTACHMENT_NOT_FOUND",
+            404,
+        ),
+    ]
+    mock_adapter.run_bytes = AsyncMock(
+        side_effect=[
+            CLIError(
+                1,
+                json.dumps(
+                    {
+                        "success": False,
+                        "schema_version": "m17.attachment-media.v1",
+                        "data": None,
+                        "error": {
+                            "code": code,
+                            "message": "unknown option: attachment media",
+                        },
+                    }
+                ),
+                "",
+            )
+            for code, _status in structured_errors
+        ]
+    )
+    mock_adapter.run_json = AsyncMock(
+        return_value={
+            "success": True,
+            "schema_version": "m16.attachment.v0",
+            "data": {"content_base64": base64.b64encode(b"legacy").decode("ascii")},
+        }
+    )
+
+    with patch("backend.main.CLIAdapter", return_value=mock_adapter):
+        for index, (code, expected_status) in enumerate(structured_errors):
+            response = client.get(f"/api/attachments/2026/05/failure-{index}.bin")
+
+            assert response.status_code == expected_status
+            assert response.json()["error"]["code"] == code
+
+    mock_adapter.run_json.assert_not_awaited()
+
+
+def test_attachment_contract_malformed_error_never_falls_back_to_legacy_export():
+    """A missing/malformed structured envelope is an honest contract failure."""
     mock_adapter = MagicMock()
     mock_adapter.run_bytes = AsyncMock(
-        side_effect=CLIError(2, "Unknown command: attachment media", "")
+        side_effect=CLIError(1, "unknown option: attachment media", "")
     )
     mock_adapter.run_json = AsyncMock(
         return_value={
             "success": True,
             "schema_version": "m16.attachment.v0",
-            "data": {
-                "rel_path": "attachments/2026/05/example.txt",
-                "filename": "example.txt",
-                "content_type": "text/plain",
-                "size": len(content),
-                "sha256": "unused-by-gui",
-                "content_base64": base64.b64encode(content).decode("ascii"),
-            },
-            "error": None,
+            "data": {"content_base64": base64.b64encode(b"legacy").decode("ascii")},
         }
     )
 
     with patch("backend.main.CLIAdapter", return_value=mock_adapter):
-        response = client.get("/api/attachments/2026/05/example.txt")
+        response = client.get("/api/attachments/2026/05/malformed.bin")
 
-    assert response.status_code == 200
-    assert response.content == content
-    assert response.headers["content-type"].startswith("text/plain")
-    assert mock_adapter.run_json.call_args[0][0] == [
-        "attachment",
-        "--export",
-        "2026/05/example.txt",
-    ]
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "ATTACHMENT_MEDIA_CLI_ERROR"
+    mock_adapter.run_json.assert_not_awaited()
 
 
-def test_attachment_endpoint_serves_bytes_from_cli_export():
-    """Attachment bytes are served only after CLI-owned export."""
-    content = b"hello from cli\n"
+def test_attachment_contract_rejects_positive_gui_error_envelope():
+    """A positive GUI envelope with an error object is not a CLI failure contract."""
     mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(
-        return_value={
-            "success": True,
-            "schema_version": "m16.attachment.v0",
-            "data": {
-                "rel_path": "attachments/2026/05/example.txt",
-                "filename": "example.txt",
-                "content_type": "text/plain",
-                "size": len(content),
-                "sha256": "unused-by-gui",
-                "content_base64": base64.b64encode(content).decode("ascii"),
-            },
-            "error": None,
-        }
-    )
-
-    with patch("backend.main.CLIAdapter", return_value=mock_adapter):
-        response = client.get("/api/attachments/2026/05/example.txt")
-
-    assert response.status_code == 200
-    assert response.content == content
-    assert response.headers["content-type"].startswith("text/plain")
-    assert response.headers["x-life-index-rel-path"] == "attachments/2026/05/example.txt"
-    assert 'filename="example.txt"' in response.headers["content-disposition"]
-    assert mock_adapter.run_json.call_args[0][0] == [
-        "attachment",
-        "--export",
-        "2026/05/example.txt",
-    ]
-
-
-def test_attachment_endpoint_serves_unicode_named_attachments_with_ascii_safe_headers():
-    """Chinese attachment names must not crash Starlette's latin-1 header encoder."""
-    content = b"fake jpeg bytes"
-    mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(
-        return_value={
-            "success": True,
-            "schema_version": "m16.attachment.v0",
-            "data": {
-                "rel_path": "../../../attachments/2026/04/微信图片_20260501085614_25_25.jpg",
-                "filename": "微信图片_20260501085614_25_25.jpg",
-                "content_type": "image/jpeg",
-                "size": len(content),
-                "sha256": "unused-by-gui",
-                "content_base64": base64.b64encode(content).decode("ascii"),
-            },
-            "error": None,
-        }
-    )
-
-    with patch("backend.main.CLIAdapter", return_value=mock_adapter):
-        response = client.get(
-            "/api/attachments/2026/04/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260501085614_25_25.jpg"
+    mock_adapter.run_bytes = AsyncMock(
+        side_effect=CLIError(
+            1,
+            json.dumps(
+                {
+                    "ok": True,
+                    "error": {
+                        "code": "CLI_VERSION_UNSUPPORTED",
+                        "message": "not a negative envelope",
+                    },
+                }
+            ),
+            "",
         )
-
-    assert response.status_code == 200
-    assert response.content == content
-    assert response.headers["content-type"].startswith("image/jpeg")
-    assert "filename=" in response.headers["content-disposition"]
-    assert "filename*=UTF-8''%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87" in response.headers[
-        "content-disposition"
-    ]
-    assert "微信图片" not in response.headers["content-disposition"]
-    assert "%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87" in response.headers[
-        "x-life-index-rel-path"
-    ]
-    assert "微信图片" not in response.headers["x-life-index-rel-path"]
-    assert mock_adapter.run_json.call_args[0][0] == [
-        "attachment",
-        "--export",
-        "2026/04/微信图片_20260501085614_25_25.jpg",
-    ]
-
-
-def test_attachment_endpoint_serves_thumbnail_variant_from_cli_exported_image():
-    """Thumbnail variants are derived from CLI-exported bytes, never filesystem reads."""
-    image_buffer = BytesIO()
-    Image.new("RGB", (220, 140), color=(120, 40, 20)).save(image_buffer, format="PNG")
-    content = image_buffer.getvalue()
-    mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(
-        return_value={
-            "success": True,
-            "schema_version": "m16.attachment.v0",
-            "data": {
-                "rel_path": "attachments/2026/05/photo.png",
-                "filename": "photo.png",
-                "content_type": "image/png",
-                "size": len(content),
-                "sha256": "unused-by-gui",
-                "content_base64": base64.b64encode(content).decode("ascii"),
-            },
-            "error": None,
-        }
     )
+    mock_adapter.run_json = AsyncMock()
 
     with patch("backend.main.CLIAdapter", return_value=mock_adapter):
-        response = client.get("/api/attachments/2026/05/photo.png?variant=thumbnail&max_px=64")
+        response = client.get("/api/attachments/2026/05/positive-error.bin")
 
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("image/png")
-    assert response.headers["x-life-index-attachment-variant"] == "thumbnail"
-    assert response.headers["x-life-index-rel-path"] == "attachments/2026/05/photo.png"
-    assert len(response.content) < len(content)
-    thumbnail = Image.open(BytesIO(response.content))
-    assert max(thumbnail.size) <= 64
-    assert mock_adapter.run_json.call_args[0][0] == [
-        "attachment",
-        "--export",
-        "2026/05/photo.png",
-    ]
-
-
-def test_attachment_endpoint_serves_preview_variant_from_cli_exported_image():
-    """Preview variants are display-only downsizes from CLI-exported bytes."""
-    image_buffer = BytesIO()
-    Image.new("RGB", (2400, 1600), color=(40, 120, 160)).save(image_buffer, format="JPEG")
-    content = image_buffer.getvalue()
-    mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(
-        return_value={
-            "success": True,
-            "schema_version": "m16.attachment.v0",
-            "data": {
-                "rel_path": "attachments/2026/05/large-photo.jpg",
-                "filename": "large-photo.jpg",
-                "content_type": "image/jpeg",
-                "size": len(content),
-                "sha256": "unused-by-gui",
-                "content_base64": base64.b64encode(content).decode("ascii"),
-            },
-            "error": None,
-        }
-    )
-
-    with patch("backend.main.CLIAdapter", return_value=mock_adapter):
-        response = client.get(
-            "/api/attachments/2026/05/large-photo.jpg?variant=preview&max_px=1400"
-        )
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("image/jpeg")
-    assert response.headers["x-life-index-attachment-variant"] == "preview"
-    assert response.headers["x-life-index-preview-max-px"] == "1400"
-    assert response.headers["cache-control"] == "public, max-age=86400"
-    assert len(response.content) < len(content)
-    preview = Image.open(BytesIO(response.content))
-    assert max(preview.size) <= 1400
-    assert mock_adapter.run_json.call_args[0][0] == [
-        "attachment",
-        "--export",
-        "2026/05/large-photo.jpg",
-    ]
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "ATTACHMENT_MEDIA_CLI_ERROR"
+    mock_adapter.run_json.assert_not_awaited()
 
 
 def test_attachment_endpoint_maps_cli_contract_error():
     """CLI attachment errors are exposed as API errors, not filesystem reads."""
     mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(
-        return_value={
-            "success": False,
-            "schema_version": "m16.attachment.v0",
-            "data": None,
-            "error": {
-                "code": "ATTACHMENT_PATH_INVALID",
-                "message": "bad attachment path",
-            },
-        }
+    mock_adapter.run_bytes = AsyncMock(
+        side_effect=CLIError(
+            1,
+            json.dumps(
+                {
+                    "success": False,
+                    "schema_version": "m17.attachment-media.v1",
+                    "data": None,
+                    "error": {
+                        "code": "ATTACHMENT_PATH_INVALID",
+                        "message": "bad attachment path",
+                    },
+                }
+            ),
+            "",
+        )
     )
+    mock_adapter.run_json = AsyncMock()
 
     with patch("backend.main.CLIAdapter", return_value=mock_adapter):
         response = client.get("/api/attachments/bad.txt")
@@ -352,21 +392,20 @@ def test_attachment_endpoint_maps_cli_contract_error():
     payload = response.json()
     assert payload["ok"] is False
     assert payload["error"]["code"] == "ATTACHMENT_PATH_INVALID"
+    mock_adapter.run_json.assert_not_awaited()
 
 
 def test_attachment_endpoint_parses_cli_error_stdout():
     """Non-zero CLI exits can still carry structured attachment JSON."""
-    from backend.adapter.cli_adapter import CLIError
-
     mock_adapter = MagicMock()
-    mock_adapter.run_json = AsyncMock(
+    mock_adapter.run_bytes = AsyncMock(
         side_effect=CLIError(
             1,
             "",
-            stdout=json.dumps(
+            json.dumps(
                 {
                     "success": False,
-                    "schema_version": "m16.attachment.v0",
+                    "schema_version": "m17.attachment-media.v1",
                     "data": None,
                     "error": {
                         "code": "ATTACHMENT_NOT_FOUND",
@@ -376,6 +415,7 @@ def test_attachment_endpoint_parses_cli_error_stdout():
             ),
         )
     )
+    mock_adapter.run_json = AsyncMock()
 
     with patch("backend.main.CLIAdapter", return_value=mock_adapter):
         response = client.get("/api/attachments/2026/05/missing.png")
@@ -384,3 +424,4 @@ def test_attachment_endpoint_parses_cli_error_stdout():
     payload = response.json()
     assert payload["ok"] is False
     assert payload["error"]["code"] == "ATTACHMENT_NOT_FOUND"
+    mock_adapter.run_json.assert_not_awaited()

@@ -10,6 +10,7 @@ import type { JournalMetadata } from '@/stores/journal-draft';
 interface MetadataSidebarProps {
   metadata: JournalMetadata;
   draftContent?: string;
+  draftScope?: string;
   onUpdate: (metadata: Partial<JournalMetadata>) => void;
   smartCapabilityAvailable?: boolean;
 }
@@ -17,6 +18,10 @@ interface MetadataSidebarProps {
 type ProposalFieldValue = string | string[] | null | undefined;
 type ProposalField = {
   value?: ProposalFieldValue;
+  field_source?: string;
+  confidence?: number;
+  rationale?: string;
+  evidence_spans?: string[];
 };
 type MetadataUnavailableEnvelope = {
   reason?: string | null;
@@ -24,13 +29,48 @@ type MetadataUnavailableEnvelope = {
   diagnostics?: unknown;
 };
 type MetadataAgentStatus = 'ready' | 'extracting' | 'filled' | 'failed' | 'timeout' | 'offline';
+type ProposalTargetField = 'title' | 'abstract' | 'project' | 'topics' | 'moods' | 'people' | 'tags' | 'links';
+type ProposalFieldStatus = 'pending' | 'accepted' | 'rejected' | 'stale';
+type NormalizedProposalValue = string | string[];
 type CachedMetadataProposal = {
+  scope: string;
+  contextIdentity: string;
+  revisionIdentity: string;
   fields: Record<string, ProposalField>;
+  baseValues: Record<ProposalTargetField, NormalizedProposalValue>;
+  requestId: string | null;
+  requestedAt: number;
   savedAt: number;
+};
+type MetadataProposalReview = {
+  record: CachedMetadataProposal;
+  statuses: Record<string, ProposalFieldStatus>;
 };
 
 let metadataProposalSequence = 0;
 const METADATA_PROPOSAL_CACHE_TTL_MS = 5 * 60 * 1000;
+const metadataProposalCache = new Map<string, CachedMetadataProposal>();
+
+const PROPOSAL_FIELD_TARGETS: Record<string, ProposalTargetField> = {
+  title: 'title',
+  abstract: 'abstract',
+  project: 'project',
+  topics: 'topics',
+  moods: 'moods',
+  people: 'people',
+  tags: 'tags',
+  links: 'links',
+};
+const PROPOSAL_TARGET_FIELDS: readonly ProposalTargetField[] = [
+  'title',
+  'abstract',
+  'project',
+  'topics',
+  'moods',
+  'people',
+  'tags',
+  'links',
+];
 
 const TOPICS = [
   { key: 'work', labelKey: 'topicWork' as const, color: 'var(--color-gold)' },
@@ -59,6 +99,10 @@ function formatProposalValue(value: ProposalFieldValue): string {
   return value ?? '';
 }
 
+function formatDraftValue(value: NormalizedProposalValue): string {
+  return Array.isArray(value) ? value.join(', ') : value;
+}
+
 function parseListProposal(value: string): string[] {
   return value
     .split(/[,，\n]/)
@@ -66,24 +110,67 @@ function parseListProposal(value: string): string[] {
     .filter(Boolean);
 }
 
-function proposalPatch(fieldName: string, value: string): Partial<JournalMetadata> {
-  if (fieldName === 'title') return { title: value };
-  if (fieldName === 'abstract') return { abstract: value };
-  if (fieldName === 'project') return { project: value };
-  if (fieldName === 'topic' || fieldName === 'topics') return { topics: parseListProposal(value) };
-  if (fieldName === 'mood' || fieldName === 'moods') return { moods: parseListProposal(value) };
-  if (fieldName === 'people') return { people: parseListProposal(value) };
-  if (fieldName === 'tags') return { tags: parseListProposal(value) };
-  if (fieldName === 'links') return { links: parseListProposal(value) };
+function proposalTargetField(fieldName: string): ProposalTargetField | null {
+  return PROPOSAL_FIELD_TARGETS[fieldName] ?? null;
+}
+
+function proposalPatch(fieldName: string, field: ProposalField): Partial<JournalMetadata> {
+  const target = proposalTargetField(fieldName);
+  if (!target) return {};
+
+  const value = normalizeProposalFieldValue(target, field.value);
+  if (target === 'title') return { title: String(value) };
+  if (target === 'abstract') return { abstract: String(value) };
+  if (target === 'project') return { project: String(value) };
+  if (target === 'topics') return { topics: Array.isArray(value) ? value : parseListProposal(value) };
+  if (target === 'moods') return { moods: Array.isArray(value) ? value : parseListProposal(value) };
+  if (target === 'people') return { people: Array.isArray(value) ? value : parseListProposal(value) };
+  if (target === 'tags') return { tags: Array.isArray(value) ? value : parseListProposal(value) };
+  if (target === 'links') return { links: Array.isArray(value) ? value : parseListProposal(value) };
   return {};
 }
 
-function proposalFieldsPatch(fields: Record<string, ProposalField> | undefined): Partial<JournalMetadata> {
-  const patch: Partial<JournalMetadata> = {};
-  for (const [fieldName, field] of Object.entries(fields ?? {})) {
-    Object.assign(patch, proposalPatch(fieldName, formatProposalValue(field.value)));
+function normalizeProposalFieldValue(
+  target: ProposalTargetField,
+  value: ProposalFieldValue,
+): NormalizedProposalValue {
+  if (target === 'title' || target === 'abstract' || target === 'project') {
+    return typeof value === 'string' ? value.trim() : '';
   }
-  return patch;
+  if (Array.isArray(value)) {
+    return value.map((item) => item.trim()).filter(Boolean);
+  }
+  return parseListProposal(typeof value === 'string' ? value : '');
+}
+
+function metadataFieldValue(metadata: JournalMetadata, target: ProposalTargetField): NormalizedProposalValue {
+  if (target === 'title') return normalizeProposalFieldValue(target, metadata.title);
+  if (target === 'abstract') return normalizeProposalFieldValue(target, metadata.abstract);
+  if (target === 'project') return normalizeProposalFieldValue(target, metadata.project);
+  if (target === 'topics') return normalizeProposalFieldValue(target, metadata.topics);
+  if (target === 'moods') return normalizeProposalFieldValue(target, metadata.moods);
+  if (target === 'people') return normalizeProposalFieldValue(target, metadata.people);
+  if (target === 'tags') return normalizeProposalFieldValue(target, metadata.tags);
+  return normalizeProposalFieldValue(target, metadata.links);
+}
+
+function proposalValuesEqual(left: NormalizedProposalValue | undefined, right: NormalizedProposalValue | undefined): boolean {
+  return JSON.stringify(left ?? '') === JSON.stringify(right ?? '');
+}
+
+function supportedProposalFields(fields: Record<string, ProposalField> | undefined): Record<string, ProposalField> {
+  const entries = Object.entries(fields ?? {});
+  // The API parser rejects unknown field keys before this component receives a
+  // proposal.  Keep this defensive boundary all-or-nothing for direct callers
+  // so an unexpected key can never be silently dropped beside valid fields.
+  if (entries.some(([fieldName]) => !proposalTargetField(fieldName))) return {};
+
+  const supported: Record<string, ProposalField> = {};
+  for (const [fieldName, field] of entries) {
+    if (!isValidProposalField(field)) continue;
+    supported[fieldName] = field;
+  }
+  return supported;
 }
 
 function createMetadataProposalRequestId(): string {
@@ -110,8 +197,106 @@ function metadataProposalDraft(metadata: JournalMetadata, draftContent: string) 
   };
 }
 
-function metadataProposalCacheKey(metadata: JournalMetadata, draftContent: string): string {
-  return JSON.stringify(metadataProposalDraft(metadata, draftContent));
+function metadataProposalContext(metadata: JournalMetadata, draftContent: string) {
+  return {
+    content: draftContent,
+    date: metadata.date,
+    location: metadata.location || '',
+    weather: metadata.weather || '',
+  };
+}
+
+function metadataProposalContextIdentity(metadata: JournalMetadata, draftContent: string): string {
+  return JSON.stringify(metadataProposalContext(metadata, draftContent));
+}
+
+function metadataProposalRevisionIdentity(metadata: JournalMetadata, draftContent: string): string {
+  // Proposal-controlled fields are intentionally excluded. Accepting one field
+  // must not stale independent sibling fields from the same request.
+  return JSON.stringify({ context: metadataProposalContext(metadata, draftContent) });
+}
+
+function metadataProposalCacheKey(record: Pick<CachedMetadataProposal, 'scope' | 'contextIdentity' | 'revisionIdentity'>): string {
+  return JSON.stringify([record.scope, record.contextIdentity, record.revisionIdentity]);
+}
+
+function isValidProposalField(field: unknown): field is ProposalField {
+  if (!field || typeof field !== 'object' || Array.isArray(field)) return false;
+  const candidate = field as Record<string, unknown>;
+  const value = candidate.value;
+  if (!(value === undefined || value === null || typeof value === 'string'
+    || (Array.isArray(value) && value.every((item) => typeof item === 'string')))) {
+    return false;
+  }
+  if (candidate.field_source !== undefined && typeof candidate.field_source !== 'string') return false;
+  if (candidate.confidence !== undefined
+    && (typeof candidate.confidence !== 'number' || !Number.isFinite(candidate.confidence))) return false;
+  if (candidate.rationale !== undefined && typeof candidate.rationale !== 'string') return false;
+  if (candidate.evidence_spans !== undefined
+    && (!Array.isArray(candidate.evidence_spans)
+      || !candidate.evidence_spans.every((span) => typeof span === 'string'))) return false;
+  return true;
+}
+
+function isValidNormalizedProposalValue(target: ProposalTargetField, value: unknown): value is NormalizedProposalValue {
+  if (target === 'title' || target === 'abstract' || target === 'project') {
+    return typeof value === 'string';
+  }
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isValidCachedMetadataProposal(value: unknown): value is CachedMetadataProposal {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<CachedMetadataProposal>;
+  if (typeof record.scope !== 'string' || typeof record.contextIdentity !== 'string'
+    || typeof record.revisionIdentity !== 'string' || typeof record.requestId !== 'string' && record.requestId !== null
+    || typeof record.requestedAt !== 'number' || !Number.isFinite(record.requestedAt)
+    || typeof record.savedAt !== 'number' || !Number.isFinite(record.savedAt)
+    || !record.fields || typeof record.fields !== 'object'
+    || !record.baseValues || typeof record.baseValues !== 'object' || Array.isArray(record.baseValues)) return false;
+  if (!PROPOSAL_TARGET_FIELDS.every((target) => (
+    Object.prototype.hasOwnProperty.call(record.baseValues, target)
+    && isValidNormalizedProposalValue(target, record.baseValues[target])
+  ))) return false;
+  return Object.entries(record.fields).every(([fieldName, field]) => Boolean(proposalTargetField(fieldName)) && isValidProposalField(field));
+}
+
+function purgeMetadataProposalCache(now = Date.now()): void {
+  for (const [key, record] of metadataProposalCache.entries()) {
+    if (!isValidCachedMetadataProposal(record) || metadataProposalExpired(record, now)) {
+      metadataProposalCache.delete(key);
+    }
+  }
+}
+
+function metadataProposalExpired(record: CachedMetadataProposal, now = Date.now()): boolean {
+  return now - record.savedAt > METADATA_PROPOSAL_CACHE_TTL_MS || now < record.savedAt;
+}
+
+function writeMetadataProposalCache(record: CachedMetadataProposal): void {
+  purgeMetadataProposalCache();
+  // The drawer is single-owner for a document; replace-on-write keeps this
+  // disposable cache bounded to exactly one proposal record globally.
+  metadataProposalCache.clear();
+  metadataProposalCache.set(metadataProposalCacheKey(record), record);
+}
+
+function readMetadataProposalCache(scope: string, contextIdentity: string, revisionIdentity: string): {
+  record: CachedMetadataProposal | null;
+  contextMatches: boolean;
+} {
+  purgeMetadataProposalCache();
+  const records = Array.from(metadataProposalCache.values()).filter((record) => record.scope === scope);
+  if (records.length === 0) return { record: null, contextMatches: false };
+  const record = records[0];
+  return {
+    record,
+    contextMatches: record.contextIdentity === contextIdentity && record.revisionIdentity === revisionIdentity,
+  };
+}
+
+function createProposalStatuses(fields: Record<string, ProposalField>): Record<string, ProposalFieldStatus> {
+  return Object.fromEntries(Object.keys(fields).map((fieldName) => [fieldName, 'pending' as const]));
 }
 
 function truncateDiagnostic(value: string): string {
@@ -211,6 +396,7 @@ function metadataIssueStatus(proposal: MetadataUnavailableEnvelope): MetadataAge
 export function MetadataSidebar({
   metadata,
   draftContent = '',
+  draftScope = 'new',
   onUpdate,
   smartCapabilityAvailable = true,
 }: MetadataSidebarProps) {
@@ -223,11 +409,22 @@ export function MetadataSidebar({
   const [isResolvingWeather, setIsResolvingWeather] = useState(false);
   const [activeProposalRequestId, setActiveProposalRequestId] = useState<string | null>(null);
   const [filledProposalKey, setFilledProposalKey] = useState<string | null>(null);
+  const contextIdentity = metadataProposalContextIdentity(metadata, draftContent);
+  const revisionIdentity = metadataProposalRevisionIdentity(metadata, draftContent);
+  const [proposalReview, setProposalReview] = useState<MetadataProposalReview | null>(() => {
+    const cached = readMetadataProposalCache(draftScope, contextIdentity, revisionIdentity);
+    return cached.record ? { record: cached.record, statuses: createProposalStatuses(cached.record.fields) } : null;
+  });
   const [statusDetailOpen, setStatusDetailOpen] = useState(false);
   const autoEnrichmentStarted = useRef(false);
-  const appliedProposalKey = useRef<string | null>(null);
-  const proposalCache = useRef(new Map<string, CachedMetadataProposal>());
-  const requestKeyById = useRef(new Map<string, string>());
+  const seenProposalKey = useRef<string | null>(null);
+  const requestSnapshotById = useRef(new Map<string, {
+    scope: string;
+    contextIdentity: string;
+    revisionIdentity: string;
+    baseValues: Record<ProposalTargetField, NormalizedProposalValue>;
+    requestedAt: number;
+  }>());
   const latestLocationRef = useRef(metadata.location ?? '');
   const geolocation = useGeolocation();
 
@@ -301,32 +498,66 @@ export function MetadataSidebar({
       ? 'metadataAgentDetailOffline'
       : 'metadataAgentDetailFailure';
 
+  const proposalContextStale = Boolean(
+    proposalReview
+    && (metadataProposalExpired(proposalReview.record)
+      || proposalReview.record.scope !== draftScope
+      || proposalReview.record.contextIdentity !== contextIdentity
+      || proposalReview.record.revisionIdentity !== revisionIdentity),
+  );
+
+  useEffect(() => {
+    const cached = readMetadataProposalCache(draftScope, contextIdentity, revisionIdentity);
+    setProposalReview((current) => {
+      if (cached.record) {
+        if (current?.record.requestId === cached.record.requestId && current.record.savedAt === cached.record.savedAt) {
+          return current;
+        }
+        return { record: cached.record, statuses: createProposalStatuses(cached.record.fields) };
+      }
+      if (current && current.record.scope === draftScope) return current;
+      return null;
+    });
+  }, [contextIdentity, draftScope, revisionIdentity]);
+
   const handleRequestProposal = useCallback(() => {
     if (!smartMetadataReady || metadataProposal.isPending) return;
     setStatusDetailOpen(false);
-    const requestKey = metadataProposalCacheKey(metadata, draftContent);
-    const cached = proposalCache.current.get(requestKey);
-    if (cached && Date.now() - cached.savedAt <= METADATA_PROPOSAL_CACHE_TTL_MS) {
-      const patch = proposalFieldsPatch(cached.fields);
-      if (Object.keys(patch).length > 0) {
-        appliedProposalKey.current = `cache:${requestKey}:${JSON.stringify(cached.fields)}`;
-        setFilledProposalKey(appliedProposalKey.current);
-        onUpdate(patch);
-      }
+    const cached = readMetadataProposalCache(draftScope, contextIdentity, revisionIdentity);
+    if (cached.record && cached.contextMatches) {
+      setProposalReview({ record: cached.record, statuses: createProposalStatuses(cached.record.fields) });
+      setFilledProposalKey(`cache:${cached.record.savedAt}`);
       return;
     }
 
     const requestId = createMetadataProposalRequestId();
     setActiveProposalRequestId(requestId);
-    appliedProposalKey.current = null;
+    seenProposalKey.current = null;
     setFilledProposalKey(null);
-    requestKeyById.current.set(requestId, requestKey);
+    setProposalReview(null);
+    requestSnapshotById.current.clear();
+    requestSnapshotById.current.set(requestId, {
+      scope: draftScope,
+      contextIdentity,
+      revisionIdentity,
+      baseValues: {
+        title: metadataFieldValue(metadata, 'title'),
+        abstract: metadataFieldValue(metadata, 'abstract'),
+        project: metadataFieldValue(metadata, 'project'),
+        topics: metadataFieldValue(metadata, 'topics'),
+        moods: metadataFieldValue(metadata, 'moods'),
+        people: metadataFieldValue(metadata, 'people'),
+        tags: metadataFieldValue(metadata, 'tags'),
+        links: metadataFieldValue(metadata, 'links'),
+      },
+      requestedAt: Date.now(),
+    });
     metadataProposal.mutate({
       request_id: requestId,
       draft: metadataProposalDraft(metadata, draftContent),
       policy: { preserve_user_fields: true },
     });
-  }, [draftContent, metadata, metadataProposal, onUpdate, smartMetadataReady]);
+  }, [contextIdentity, draftContent, draftScope, metadata, metadataProposal, revisionIdentity, smartMetadataReady]);
 
   const handleStatusCapsuleClick = useCallback(() => {
     if (metadataProposal.isPending) return;
@@ -419,22 +650,82 @@ export function MetadataSidebar({
     if (activeProposalRequestId && proposalRequestId !== activeProposalRequestId) return;
 
     const proposalKey = `${proposalRequestId ?? 'legacy'}:${JSON.stringify(proposal.fields ?? {})}`;
-    if (appliedProposalKey.current === proposalKey) return;
+    if (seenProposalKey.current === proposalKey) return;
 
-    const patch = proposalFieldsPatch(proposal.fields as Record<string, ProposalField>);
+    const fields = supportedProposalFields(proposal.fields as Record<string, ProposalField>);
+    if (Object.keys(fields).length === 0) return;
+
+    const requestedAt = Date.now();
+    const requestSnapshot = proposalRequestId ? requestSnapshotById.current.get(proposalRequestId) : undefined;
+    if (proposalRequestId) requestSnapshotById.current.delete(proposalRequestId);
+    const baseValues = requestSnapshot?.baseValues ?? {
+      title: metadataFieldValue(metadata, 'title'),
+      abstract: metadataFieldValue(metadata, 'abstract'),
+      project: metadataFieldValue(metadata, 'project'),
+      topics: metadataFieldValue(metadata, 'topics'),
+      moods: metadataFieldValue(metadata, 'moods'),
+      people: metadataFieldValue(metadata, 'people'),
+      tags: metadataFieldValue(metadata, 'tags'),
+      links: metadataFieldValue(metadata, 'links'),
+    };
+    const record: CachedMetadataProposal = {
+      scope: requestSnapshot?.scope ?? draftScope,
+      contextIdentity: requestSnapshot?.contextIdentity ?? contextIdentity,
+      revisionIdentity: requestSnapshot?.revisionIdentity ?? revisionIdentity,
+      fields,
+      baseValues,
+      requestId: proposalRequestId,
+      requestedAt: requestSnapshot?.requestedAt ?? requestedAt,
+      savedAt: requestedAt,
+    };
+
+    seenProposalKey.current = proposalKey;
+    writeMetadataProposalCache(record);
+    setFilledProposalKey(proposalKey);
+    setProposalReview({ record, statuses: createProposalStatuses(fields) });
+  }, [activeProposalRequestId, contextIdentity, draftScope, metadata, metadataProposal.data, revisionIdentity]);
+
+  const handleAcceptProposalField = useCallback((fieldName: string) => {
+    const target = proposalTargetField(fieldName);
+    if (!target || !proposalReview) return;
+
+    if (
+      proposalReview.record.scope !== draftScope
+      || proposalReview.record.contextIdentity !== contextIdentity
+      || proposalReview.record.revisionIdentity !== revisionIdentity
+      || metadataProposalExpired(proposalReview.record)
+    ) {
+      setProposalReview((current) => current
+        ? { ...current, statuses: { ...current.statuses, [fieldName]: 'stale' } }
+        : current);
+      return;
+    }
+
+    const baseValue = proposalReview.record.baseValues[target];
+    const currentValue = metadataFieldValue(metadata, target);
+    if (!proposalValuesEqual(currentValue, baseValue)) {
+      setProposalReview((current) => current
+        ? { ...current, statuses: { ...current.statuses, [fieldName]: 'stale' } }
+        : current);
+      return;
+    }
+
+    const field = proposalReview.record.fields[fieldName];
+    if (!field) return;
+    const patch = proposalPatch(fieldName, field);
     if (Object.keys(patch).length === 0) return;
 
-    appliedProposalKey.current = proposalKey;
-    setFilledProposalKey(proposalKey);
-    const requestKey = proposalRequestId ? requestKeyById.current.get(proposalRequestId) : null;
-    if (requestKey) {
-      proposalCache.current.set(requestKey, {
-        fields: proposal.fields as Record<string, ProposalField>,
-        savedAt: Date.now(),
-      });
-    }
     onUpdate(patch);
-  }, [activeProposalRequestId, metadataProposal.data, onUpdate]);
+    setProposalReview((current) => current
+      ? { ...current, statuses: { ...current.statuses, [fieldName]: 'accepted' } }
+      : current);
+  }, [contextIdentity, draftScope, metadata, onUpdate, proposalReview, revisionIdentity]);
+
+  const handleRejectProposalField = useCallback((fieldName: string) => {
+    setProposalReview((current) => current
+      ? { ...current, statuses: { ...current.statuses, [fieldName]: 'rejected' } }
+      : current);
+  }, []);
 
   const toggleTopic = (topic: string) => {
     const currentTopics = metadata.topics || [];
@@ -584,6 +875,107 @@ export function MetadataSidebar({
           )}
         </div>
       </div>
+
+      {proposalReview && (
+        <section
+          data-testid="metadata-proposal-panel"
+          className="mb-5 space-y-3 rounded-2xl border border-[var(--color-cyan)]/20 bg-[var(--color-ether-surface-ghost)] p-4"
+          aria-label={t('metadataProposalReviewTitle')}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-semibold text-[var(--color-cyan)]">
+              {t('metadataProposalReviewTitle')}
+            </h4>
+            <span
+              data-testid="metadata-proposal-context-status"
+              className={`text-xs ${proposalContextStale ? 'text-[var(--color-coral)]' : 'text-[var(--color-muted)]'}`}
+            >
+              {proposalContextStale ? t('metadataProposalStale') : t('metadataProposalCached')}
+            </span>
+          </div>
+
+          {Object.entries(proposalReview.record.fields).map(([fieldName, field]) => {
+            const target = proposalTargetField(fieldName);
+            if (!target) return null;
+            const status = proposalContextStale
+              ? 'stale'
+              : proposalReview.statuses[fieldName] ?? 'pending';
+            const currentValue = formatDraftValue(metadataFieldValue(metadata, target));
+            const proposedValue = formatProposalValue(field.value);
+            const controlsDisabled = status !== 'pending' || proposalContextStale;
+
+            return (
+              <div
+                key={fieldName}
+                data-testid={`metadata-proposal-field-${fieldName}`}
+                className="rounded-xl border border-white/[0.08] p-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--color-primary)]">
+                    {fieldName}
+                  </span>
+                  <span
+                    data-testid={`metadata-proposal-status-${fieldName}`}
+                    className={`text-xs ${status === 'stale' ? 'text-[var(--color-coral)]' : status === 'accepted' ? 'text-[var(--color-green)]' : 'text-[var(--color-muted)]'}`}
+                  >
+                    {status === 'stale'
+                      ? t('metadataProposalStale')
+                      : status === 'accepted'
+                        ? t('metadataProposalAccepted')
+                        : status === 'rejected'
+                          ? t('metadataProposalReject')
+                          : t('metadataProposalProposed')}
+                  </span>
+                </div>
+                <div
+                  data-testid={`metadata-proposal-diff-${fieldName}`}
+                  className="mt-2 grid gap-2 text-xs text-[var(--color-secondary)] sm:grid-cols-2"
+                >
+                  <div>
+                    <span className="block text-[var(--color-muted)]">{t('metadataProposalCurrent')}</span>
+                    <span className="break-words text-[var(--color-primary)]">{currentValue || '—'}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[var(--color-muted)]">{t('metadataProposalProposed')}</span>
+                    <span className="break-words text-[var(--color-cyan)]">{proposedValue || '—'}</span>
+                  </div>
+                </div>
+                {(field.field_source || typeof field.confidence === 'number' || field.rationale) && (
+                  <div className="mt-2 space-y-1 text-xs text-[var(--color-secondary)]">
+                    {field.field_source && <p><span className="text-[var(--color-muted)]">{t('metadataProposalSource')}: </span>{field.field_source}</p>}
+                    {typeof field.confidence === 'number' && Number.isFinite(field.confidence) && (
+                      <p><span className="text-[var(--color-muted)]">{t('metadataProposalConfidence')}: </span>{Math.round(field.confidence * 100)}%</p>
+                    )}
+                    {field.rationale && <p><span className="text-[var(--color-muted)]">{t('metadataProposalRationale')}: </span>{field.rationale}</p>}
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    data-testid={`metadata-proposal-accept-${fieldName}`}
+                    aria-label={`${t('metadataProposalAccept')} ${fieldName}`}
+                    disabled={controlsDisabled}
+                    onClick={() => handleAcceptProposalField(fieldName)}
+                    className="rounded-full border border-[var(--color-cyan)]/35 px-3 py-1.5 text-xs text-[var(--color-cyan)] transition-colors hover:border-[var(--color-cyan)]/60 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {t('metadataProposalAccept')}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={`metadata-proposal-reject-${fieldName}`}
+                    aria-label={`${t('metadataProposalReject')} ${fieldName}`}
+                    disabled={controlsDisabled}
+                    onClick={() => handleRejectProposalField(fieldName)}
+                    className="rounded-full border border-white/[0.12] px-3 py-1.5 text-xs text-[var(--color-muted)] transition-colors hover:border-white/[0.24] hover:text-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {t('metadataProposalReject')}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      )}
 
       <div className="space-y-5">
         {/* Title */}

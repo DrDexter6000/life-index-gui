@@ -13,11 +13,12 @@ import json
 import os
 import re
 import shlex
+import signal
 import shutil
 import subprocess
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -26,10 +27,31 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-HOST_AGENT_SCHEMA_VERSION = "gui.host_agent"
+from host_agent_bridge.contracts import (
+    HEALTH_SCHEMA,
+    METADATA_SCHEMA,
+    QUERY_SCHEMA,
+    parse_exact_json_object,
+    validate_health,
+    validate_metadata_proposal,
+    validate_query_response,
+)
+from host_agent_bridge.codex_cli_adapter import (
+    CODEX_CLI_KIND,
+    CodexAdapterError,
+    CodexCLIAdapter,
+    adapter_kind,
+    codex_health_payload,
+    configured_codex_executable,
+    configured_timeout_seconds,
+    load_configured_prompt,
+)
+
 RUNTIME_UNCONFIGURED_REASON = "host-agent-runtime-unconfigured"
+ADAPTER_KIND_INVALID_REASON = "host-agent-adapter-kind-invalid"
+INVALID_ENVELOPE_REASON = "host-agent-envelope-invalid"
 DEFAULT_TIMEOUT_SECONDS = 600.0
-DIAGNOSTIC_TAIL_CHARS = 1200
+PROCESS_CLEANUP_WAIT_SECONDS = 0.75
 PROMPT_DIR = Path(__file__).with_name("prompts")
 DEFAULT_QUERY_PROMPT_TEMPLATE = """You are the user-provided Host Agent for Life Index GUI Handoff.
 Return only a JSON object matching schema_version gui.host_agent.query_response.v1.
@@ -39,26 +61,12 @@ $request_json
 """
 DEFAULT_METADATA_PROMPT_TEMPLATE = """You are the user-provided Host Agent for Life Index metadata proposal.
 Return only a JSON object matching schema_version gui.host_agent.metadata_proposal.v1.
+The fields map accepts exactly: title, abstract, project, topics, moods, people, tags, links.
+Use plural topics and moods in the envelope. Unknown field keys (including weather) are protocol errors.
 $tool_hint
 Request JSON:
 $request_json
 """
-METADATA_FIELD_KEYS = {
-    "title",
-    "abstract",
-    "topic",
-    "topics",
-    "mood",
-    "moods",
-    "tags",
-    "people",
-    "project",
-    "links",
-}
-METADATA_FIELD_ALIASES = {
-    "summary": "abstract",
-}
-
 app = FastAPI(title="Life Index Host Agent Reference Bridge")
 
 
@@ -171,7 +179,7 @@ def _command_exists(argv: list[str]) -> bool:
 
 def unavailable_health(reason: str = RUNTIME_UNCONFIGURED_REASON) -> dict[str, Any]:
     return {
-        "schema_version": f"{HOST_AGENT_SCHEMA_VERSION}.health.v1",
+        "schema_version": HEALTH_SCHEMA,
         "running": False,
         "ready": False,
         "degraded": True,
@@ -187,7 +195,7 @@ def _check_runtime() -> dict[str, Any]:
         argv = _runtime_argv()
     except Exception as exc:
         payload = unavailable_health("host-agent-runtime-config-invalid")
-        payload["checks"][0]["error"] = str(exc)
+        payload["checks"][0]["error_type"] = type(exc).__name__
         return payload
 
     if not argv:
@@ -229,7 +237,7 @@ def _check_runtime() -> dict[str, Any]:
 
     ready = all(check["status"] == "ok" for check in checks)
     return {
-        "schema_version": f"{HOST_AGENT_SCHEMA_VERSION}.health.v1",
+        "schema_version": HEALTH_SCHEMA,
         "running": command_ok,
         "ready": ready,
         "degraded": not ready,
@@ -238,6 +246,190 @@ def _check_runtime() -> dict[str, Any]:
         "runtime": {"kind": "host-agent-reference-bridge", "interface_version": "v1"},
         "checks": checks,
     }
+
+
+def _selected_adapter_kind() -> str:
+    """Resolve the explicitly configured bridge adapter kind."""
+
+    try:
+        return adapter_kind()
+    except CodexAdapterError as exc:
+        raise CodexAdapterError(ADAPTER_KIND_INVALID_REASON) from exc
+
+
+def _unavailable_query_for_codex(
+    request: BridgeQueryRequest,
+    reason: str,
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    diagnostics = _sanitize_codex_diagnostics(diagnostics)
+    payload = {
+        "schema_version": QUERY_SCHEMA,
+        "request_id": request.request_id,
+        "conversation_id": request.conversation_id,
+        "source": "host-agent",
+        "mode": "UNAVAILABLE",
+        "reason": reason,
+        "query": request.query,
+        "answer": {
+            "mode": "UNAVAILABLE",
+            "reason": reason,
+            "summary": "",
+            "insights": [],
+            "gap": "Codex CLI did not provide a valid handoff envelope.",
+            "suggestions": [],
+        },
+        "evidence": [],
+        "tool_trace": [],
+    }
+    if diagnostics:
+        payload["diagnostics"] = diagnostics
+    try:
+        validate_query_response(payload)
+    except ValueError:
+        # This helper is internal and only constructs the canonical unavailable
+        # shape; fail closed rather than emitting a malformed terminal frame.
+        payload.pop("diagnostics", None)
+    return payload
+
+
+_CODEX_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "source_id",
+        "input_length",
+        "retained_length",
+        "truncated",
+        "assembly_version",
+        "assembly_steps",
+        "schema_family",
+        "stage",
+        "reason",
+        "error_type",
+        "returncode",
+        "timed_out",
+        "cancelled",
+        "output_present",
+        "output_size",
+        "stdout_length",
+        "stderr_length",
+        "request_length",
+        "request_cap",
+    }
+)
+_CODEX_DIAGNOSTIC_STRING_KEYS = frozenset(
+    {"source_id", "assembly_version", "schema_family", "stage", "reason", "error_type"}
+)
+_CODEX_DIAGNOSTIC_INT_KEYS = frozenset(
+    {
+        "input_length",
+        "retained_length",
+        "returncode",
+        "output_size",
+        "stdout_length",
+        "stderr_length",
+        "request_length",
+        "request_cap",
+    }
+)
+_CODEX_DIAGNOSTIC_BOOL_KEYS = frozenset(
+    {"truncated", "timed_out", "cancelled", "output_present"}
+)
+
+
+def _sanitize_codex_diagnostics(diagnostics: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Project adapter diagnostics through one narrow, body-free allowlist."""
+
+    if not isinstance(diagnostics, Mapping):
+        return {}
+    safe: dict[str, Any] = {}
+    for key, value in diagnostics.items():
+        if key not in _CODEX_DIAGNOSTIC_KEYS:
+            continue
+        if key in _CODEX_DIAGNOSTIC_STRING_KEYS:
+            if not isinstance(value, str) or len(value) > 128:
+                continue
+            if key == "source_id" and re.fullmatch(r"[A-Za-z0-9._-]+", value) is None:
+                continue
+            if key != "source_id" and re.fullmatch(r"[A-Za-z0-9._:-]+", value) is None:
+                continue
+            safe[key] = value
+        elif key in _CODEX_DIAGNOSTIC_INT_KEYS:
+            if isinstance(value, bool) or not isinstance(value, int) or abs(value) > 10_000_000:
+                continue
+            safe[key] = value
+        elif key in _CODEX_DIAGNOSTIC_BOOL_KEYS and isinstance(value, bool):
+            safe[key] = value
+        elif key == "assembly_steps" and isinstance(value, list):
+            steps = [
+                item
+                for item in value
+                if isinstance(item, str)
+                and item in {"procedure-prefix", "wire-format-instruction", "canonical-request-json"}
+            ]
+            safe[key] = steps[:8]
+    return safe
+
+
+def _attach_codex_diagnostics(payload: dict[str, Any], diagnostics: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    # A named adapter is untrusted at this relay boundary too: sanitize an
+    # envelope-supplied diagnostics object before merging adapter diagnostics.
+    existing = payload.get("diagnostics")
+    safe_diagnostics = _sanitize_codex_diagnostics(existing if isinstance(existing, Mapping) else None)
+    safe_diagnostics.update(_sanitize_codex_diagnostics(diagnostics))
+    next_payload = dict(payload)
+    if not safe_diagnostics:
+        next_payload.pop("diagnostics", None)
+        return next_payload
+    next_payload["diagnostics"] = safe_diagnostics
+    return next_payload
+
+
+def _validate_codex_query_payload(
+    request: BridgeQueryRequest,
+    payload: object,
+    diagnostics: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    safe_diagnostics = _sanitize_codex_diagnostics(diagnostics)
+    if not isinstance(payload, dict):
+        return _unavailable_query_for_codex(
+            request, INVALID_ENVELOPE_REASON, {"stage": "codex-result-validate", **safe_diagnostics}
+        )
+    candidate = _attach_codex_diagnostics(payload, safe_diagnostics)
+    try:
+        validate_query_response(candidate)
+        json.dumps(candidate, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError, OverflowError):
+        return _unavailable_query_for_codex(
+            request, INVALID_ENVELOPE_REASON, {"stage": "codex-result-validate", **safe_diagnostics}
+        )
+    return candidate
+
+
+def _validate_codex_metadata_payload(
+    request: BridgeMetadataRequest,
+    payload: object,
+    diagnostics: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    safe_diagnostics = _sanitize_codex_diagnostics(diagnostics)
+    if not isinstance(payload, dict):
+        return _unavailable_metadata_for_codex(
+            request,
+            INVALID_ENVELOPE_REASON,
+            diagnostics={"stage": "codex-result-validate", **safe_diagnostics},
+        )
+    candidate = _attach_codex_diagnostics(payload, safe_diagnostics)
+    try:
+        validate_metadata_proposal(candidate)
+        json.dumps(candidate, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError, OverflowError):
+        return _unavailable_metadata_for_codex(
+            request,
+            INVALID_ENVELOPE_REASON,
+            diagnostics={"stage": "codex-result-validate", **safe_diagnostics},
+        )
+    return candidate
 
 
 def _query_prompt(request: BridgeQueryRequest) -> str:
@@ -351,6 +543,112 @@ async def _read_process_pipe(
         await queue.put((name, text))
 
 
+def _runtime_process_create_kwargs() -> dict[str, Any]:
+    """Isolate generic runtime children so tree cleanup has one root."""
+    if os.name == "nt":
+        creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        return {"creationflags": creation_flags} if creation_flags else {}
+    return {"start_new_session": True}
+
+
+async def _bounded_runtime_wait(wait_task: asyncio.Task[int]) -> bool:
+    if wait_task.done():
+        return True
+    try:
+        await asyncio.wait_for(asyncio.shield(wait_task), PROCESS_CLEANUP_WAIT_SECONDS)
+    except (asyncio.TimeoutError, asyncio.CancelledError, OSError, RuntimeError):
+        return False
+    return True
+
+
+async def _taskkill_runtime_tree(pid: int) -> bool:
+    """Kill a Windows runtime process and all descendants without blocking."""
+    try:
+        completed = await asyncio.wait_for(
+            asyncio.to_thread(
+                subprocess.run,
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            ),
+            PROCESS_CLEANUP_WAIT_SECONDS,
+        )
+    except (asyncio.TimeoutError, asyncio.CancelledError, OSError, RuntimeError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
+async def _terminate_runtime_process(
+    process: asyncio.subprocess.Process,
+    wait_task: asyncio.Task[int],
+) -> None:
+    """Terminate a generic runtime process tree, then use a direct fallback."""
+    if process.returncode is not None or wait_task.done():
+        return
+
+    pid = getattr(process, "pid", None)
+    # start_new_session=True makes the root pid the stable POSIX process-group
+    # id.
+    process_group_id = pid if pid is not None and os.name != "nt" else None
+    tree_signal_sent = False
+    if pid is not None and os.name == "nt":
+        tree_signal_sent = await _taskkill_runtime_tree(pid)
+    elif process_group_id is not None:
+        try:
+            os.killpg(process_group_id, signal.SIGTERM)
+            tree_signal_sent = True
+        except (OSError, ProcessLookupError, RuntimeError):
+            pass
+
+    if not tree_signal_sent:
+        terminate = getattr(process, "terminate", None)
+        try:
+            if callable(terminate):
+                terminate()
+            else:
+                process.kill()
+        except (OSError, ProcessLookupError, RuntimeError, AttributeError):
+            pass
+    if await _bounded_runtime_wait(wait_task) and os.name == "nt":
+        return
+
+    if process_group_id is not None:
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except (OSError, ProcessLookupError, RuntimeError):
+            pass
+    try:
+        process.kill()
+    except (OSError, ProcessLookupError, RuntimeError, AttributeError):
+        pass
+    await _bounded_runtime_wait(wait_task)
+
+
+async def _close_runtime_process(
+    process: asyncio.subprocess.Process,
+    wait_task: asyncio.Task[int],
+    readers: list[asyncio.Task[None]],
+) -> None:
+    """Bounded cleanup for normal completion, timeout, and client disconnect."""
+    for reader in readers:
+        if not reader.done():
+            reader.cancel()
+
+    await _terminate_runtime_process(process, wait_task)
+
+    if not wait_task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(wait_task), timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, OSError):
+            wait_task.cancel()
+
+    await asyncio.gather(*readers, return_exceptions=True)
+    if not wait_task.done():
+        wait_task.cancel()
+    await asyncio.gather(wait_task, return_exceptions=True)
+
+
 async def _run_runtime_stream(prompt: str) -> AsyncIterator[tuple[str, dict[str, Any] | RuntimeResult]]:
     argv = _runtime_argv()
     if not argv:
@@ -363,6 +661,7 @@ async def _run_runtime_stream(prompt: str) -> AsyncIterator[tuple[str, dict[str,
         env=_build_runtime_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **_runtime_process_create_kwargs(),
     )
 
     queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
@@ -381,67 +680,82 @@ async def _run_runtime_stream(prompt: str) -> AsyncIterator[tuple[str, dict[str,
     deadline = asyncio.get_running_loop().time() + _runtime_timeout()
     timed_out = False
 
-    while True:
-        if wait_task.done() and queue.empty():
-            break
+    try:
+        while True:
+            if wait_task.done() and queue.empty():
+                break
 
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            timed_out = True
-            process.kill()
-            await process.wait()
-            break
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                timed_out = True
+                break
 
-        try:
-            stream_name, text = await asyncio.wait_for(queue.get(), timeout=min(0.1, remaining))
-        except asyncio.TimeoutError:
-            continue
-
-        if stream_name == "stdout":
-            stdout_parts.append(text)
-            if stdout_json_started:
+            try:
+                stream_name, text = await asyncio.wait_for(queue.get(), timeout=min(0.1, remaining))
+            except asyncio.TimeoutError:
                 continue
-            if _stdout_line_is_json_start(text):
-                stdout_json_started = True
-                continue
-            if prompt_probe_active:
-                prompt_probe_buffer += text
-                compact_probe = _compact_runtime_text(prompt_probe_buffer)
-                if "Query:".startswith(compact_probe):
+
+            if stream_name == "stdout":
+                stdout_parts.append(text)
+                if stdout_json_started:
                     continue
-                if compact_probe.startswith("Query:"):
-                    suppress_stdout_until_reasoning = True
+                if _stdout_line_is_json_start(text):
+                    stdout_json_started = True
+                    continue
+                if prompt_probe_active:
+                    prompt_probe_buffer += text
+                    compact_probe = _compact_runtime_text(prompt_probe_buffer)
+                    if "Query:".startswith(compact_probe):
+                        continue
+                    if compact_probe.startswith("Query:"):
+                        suppress_stdout_until_reasoning = True
+                        prompt_probe_active = False
+                        prompt_probe_buffer = ""
+                        reasoning_probe_buffer = ""
+                        continue
+
                     prompt_probe_active = False
+                    pending_text = prompt_probe_buffer
                     prompt_probe_buffer = ""
-                    reasoning_probe_buffer = ""
+                    delta_text = _clean_runtime_delta_line(pending_text)
+                    if delta_text:
+                        yield "delta", {"text": delta_text}
                     continue
-
-                prompt_probe_active = False
-                pending_text = prompt_probe_buffer
-                prompt_probe_buffer = ""
-                delta_text = _clean_runtime_delta_line(pending_text)
+                if _is_runtime_prompt_echo_start(text):
+                    suppress_stdout_until_reasoning = True
+                    continue
+                if suppress_stdout_until_reasoning:
+                    reasoning_probe_buffer = (reasoning_probe_buffer + text)[-4000:]
+                    if _is_runtime_reasoning_header(text) or "Reasoning" in _compact_runtime_text(reasoning_probe_buffer):
+                        suppress_stdout_until_reasoning = False
+                        reasoning_probe_buffer = ""
+                    continue
+                delta_text = _clean_runtime_delta_line(text)
                 if delta_text:
                     yield "delta", {"text": delta_text}
-                continue
-            if _is_runtime_prompt_echo_start(text):
-                suppress_stdout_until_reasoning = True
-                continue
-            if suppress_stdout_until_reasoning:
-                reasoning_probe_buffer = (reasoning_probe_buffer + text)[-4000:]
-                if _is_runtime_reasoning_header(text) or "Reasoning" in _compact_runtime_text(reasoning_probe_buffer):
-                    suppress_stdout_until_reasoning = False
-                    reasoning_probe_buffer = ""
-                continue
-            delta_text = _clean_runtime_delta_line(text)
-            if delta_text:
-                yield "delta", {"text": delta_text}
-        else:
-            stderr_parts.append(text)
-            if text.strip():
-                yield "status", {"phase": "host_runtime", "message": text.strip()}
+            else:
+                stderr_parts.append(text)
+                if text.strip():
+                    yield "status", {
+                        "phase": "host_runtime",
+                        "message": "Host agent runtime emitted diagnostics.",
+                    }
+    finally:
+        cleanup_task = asyncio.create_task(_close_runtime_process(process, wait_task, readers))
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            await asyncio.shield(cleanup_task)
+            raise
 
-    await asyncio.gather(*readers, return_exceptions=True)
-    returncode = process.returncode if process.returncode is not None else 124
+    returncode = process.returncode
+    if returncode is None and wait_task.done() and not wait_task.cancelled():
+        try:
+            returncode = wait_task.result()
+        except (Exception, asyncio.CancelledError):
+            returncode = None
+    if returncode is None:
+        returncode = 124
     if timed_out:
         returncode = 124
 
@@ -453,437 +767,19 @@ async def _run_runtime_stream(prompt: str) -> AsyncIterator[tuple[str, dict[str,
     )
 
 
-def _json_candidates(text: str) -> Iterator[str]:
-    stripped = text.strip()
-    if stripped:
-        yield stripped
-
-    for match in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE):
-        yield match.group(1).strip()
-
-    start = text.find("{")
-    while start >= 0:
-        depth = 0
-        in_string = False
-        escape = False
-        for index in range(start, len(text)):
-            char = text[index]
-            if in_string:
-                if escape:
-                    escape = False
-                elif char == "\\":
-                    escape = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    yield text[start : index + 1]
-                    break
-        start = text.find("{", start + 1)
-
-
-def _escape_unescaped_quotes(value: str) -> str:
-    repaired: list[str] = []
-    escaped = False
-    for char in value:
-        if char == '"' and not escaped:
-            repaired.append('\\"')
-        else:
-            repaired.append(char)
-        escaped = char == "\\" and not escaped
-        if char != "\\":
-            escaped = False
-    return "".join(repaired)
-
-
-def _repair_common_json_string_value_quotes(candidate: str) -> str:
-    repaired_lines: list[str] = []
-    string_value_line = re.compile(r'^(\s*"[^"\n]+"\s*:\s*")(.*)(",?\s*)$')
-    for line in candidate.splitlines():
-        match = string_value_line.match(line)
-        if not match:
-            repaired_lines.append(line)
-            continue
-        prefix, value, suffix = match.groups()
-        repaired_lines.append(f"{prefix}{_escape_unescaped_quotes(value)}{suffix}")
-    return "\n".join(repaired_lines)
-
-
-def _extract_json_object(text: str) -> dict[str, Any]:
-    for candidate in _json_candidates(text):
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            try:
-                parsed = json.loads(_repair_common_json_string_value_quotes(candidate))
-            except json.JSONDecodeError:
-                continue
-        if isinstance(parsed, dict):
-            return parsed
-    raise ValueError("host-agent-output-not-json")
-
-
-def _route_id_from_ref(value: str) -> str:
-    route_id = value.strip()
-    if route_id.startswith("Journals/"):
-        route_id = route_id.removeprefix("Journals/")
-    return route_id
-
-
-def _rel_path_from_ref(value: str) -> str:
-    rel_path = value.strip()
-    if rel_path and not rel_path.startswith("Journals/"):
-        rel_path = f"Journals/{rel_path}"
-    return rel_path
-
-
-def _evidence_from_ref(ref: dict[str, Any]) -> dict[str, str] | None:
-    raw_id = str(ref.get("id") or ref.get("rel_path") or "").strip()
-    raw_rel_path = str(ref.get("rel_path") or ref.get("id") or "").strip()
-    title = str(ref.get("title") or "").strip()
-    date = str(ref.get("date") or "").strip()
-    if not raw_id or not raw_rel_path or not title or not date:
-        return None
-    return {
-        "id": _route_id_from_ref(raw_id),
-        "rel_path": _rel_path_from_ref(raw_rel_path),
-        "title": title,
-        "date": date,
-    }
-
-
-def _normalized_evidence_from_ref(ref: dict[str, Any]) -> dict[str, Any] | None:
-    evidence = _evidence_from_ref(ref)
-    if evidence is None:
-        return None
-    normalized: dict[str, Any] = dict(ref)
-    normalized.update(evidence)
-    return normalized
-
-
-def _evidence_from_path_ref(value: str) -> dict[str, str] | None:
-    raw = value.strip()
-    if not raw:
-        return None
-    rel_path = _rel_path_from_ref(raw)
-    route_id = _route_id_from_ref(raw)
-    filename = Path(route_id).name or route_id
-    match = re.search(r"(\d{4}-\d{2}-\d{2})", route_id)
-    if not match:
-        return None
-    return {
-        "id": route_id,
-        "rel_path": rel_path,
-        "title": filename,
-        "date": match.group(1),
-    }
-
-
-def _coerce_insights_and_evidence(payload: dict[str, Any]) -> None:
-    answer = payload.get("answer")
-    if not isinstance(answer, dict):
-        return
-    insights = answer.get("insights")
-    top_level_insights = payload.get("insights")
-    if (not insights) and isinstance(top_level_insights, list):
-        insights = top_level_insights
-        answer["insights"] = insights
-    if not isinstance(insights, list):
-        answer["insights"] = []
-        return
-
-    raw_evidence = []
-    if isinstance(payload.get("evidence"), list):
-        raw_evidence.extend(payload["evidence"])
-    if isinstance(answer.get("evidence"), list):
-        raw_evidence.extend(answer["evidence"])
-
-    top_level_evidence = []
-    for item in raw_evidence:
-        if not isinstance(item, dict):
-            continue
-        evidence = _normalized_evidence_from_ref(item)
-        if evidence is not None:
-            top_level_evidence.append(evidence)
-    evidence_by_id: dict[str, dict[str, Any]] = {
-        str(item.get("id")): item for item in top_level_evidence
-    }
-    evidence_refs = list(evidence_by_id)
-    coerced: list[dict[str, Any]] = []
-    for item in insights:
-        if isinstance(item, dict):
-            refs = item.get("evidence_refs")
-            normalized_refs: list[str] = []
-            if isinstance(refs, list):
-                for ref in refs:
-                    if isinstance(ref, dict):
-                        evidence = _normalized_evidence_from_ref(ref)
-                        if evidence is None:
-                            continue
-                        evidence_by_id.setdefault(evidence["id"], evidence)
-                        normalized_refs.append(evidence["id"])
-                    elif ref:
-                        route_id = _route_id_from_ref(str(ref))
-                        normalized_refs.append(route_id)
-                        evidence = _evidence_from_path_ref(str(ref))
-                        if evidence is not None:
-                            evidence_by_id.setdefault(evidence["id"], evidence)
-                            payload["_path_evidence_fallback"] = True
-            item["evidence_refs"] = normalized_refs
-            coerced.append(item)
-        else:
-            coerced.append(
-                {
-                    "theme": "host-agent-insight",
-                    "interpretation": str(item),
-                    "evidence_refs": evidence_refs,
-                }
-            )
-    answer["insights"] = coerced
-    payload["evidence"] = list(evidence_by_id.values())
-
-
-def _unwrap_nested_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    if payload.get("mode") or not isinstance(metadata, dict):
-        return payload
-    if metadata.get("mode") and isinstance(metadata.get("answer"), dict):
-        unwrapped = dict(metadata)
-        unwrapped.setdefault("schema_version", payload.get("schema_version"))
-        return unwrapped
-    return payload
-
-
 def _validate_query_payload(payload: dict[str, Any], request: BridgeQueryRequest) -> dict[str, Any]:
-    payload = _unwrap_nested_query_payload(payload)
-    answer = payload.get("answer")
-    answer_mode = answer.get("mode") if isinstance(answer, dict) else None
-    mode = str(payload.get("mode") or answer_mode or "").strip().upper()
-    if not mode:
-        raise ValueError("host-agent-output-schema-invalid")
-    payload["mode"] = mode
+    """Validate a complete query envelope without mutating it."""
 
-    if not isinstance(answer, dict):
-        answer = {
-            "mode": mode,
-            "reason": payload.get("reason"),
-            "summary": "",
-            "insights": [],
-            "gap": None,
-            "suggestions": [],
-        }
-        payload["answer"] = answer
-
-    answer["mode"] = str(answer.get("mode") or mode).strip().upper()
-    if answer["mode"] != mode:
-        raise ValueError("host-agent-output-mode-mismatch")
-    answer.setdefault("summary", "")
-    answer.setdefault("gap", None)
-    answer.setdefault("suggestions", [])
-
-    _coerce_insights_and_evidence(payload)
-
-    evidence = payload.get("evidence", [])
-    if not isinstance(evidence, list):
-        raise ValueError("host-agent-output-schema-invalid")
-    if mode == "GROUNDED" and not evidence:
-        raise ValueError("host-agent-output-grounded-without-evidence")
-    if mode == "UNGROUNDED" and evidence:
-        raise ValueError("host-agent-output-ungrounded-with-evidence")
-
-    for item in evidence:
-        if not isinstance(item, dict):
-            raise ValueError("host-agent-output-schema-invalid")
-        for key in ("id", "rel_path", "title", "date"):
-            if not item.get(key):
-                raise ValueError("host-agent-output-schema-invalid")
-
-    payload.setdefault("schema_version", f"{HOST_AGENT_SCHEMA_VERSION}.query_response.v1")
-    payload.setdefault("request_id", request.request_id)
-    payload.setdefault("conversation_id", request.conversation_id)
-    payload.setdefault("source", "host-agent")
-    payload.setdefault("query", request.query)
-    used_path_evidence_fallback = bool(payload.pop("_path_evidence_fallback", False))
-    if mode == "GROUNDED" and used_path_evidence_fallback:
-        fallback_reason = "host-agent-returned-grounded-with-path-evidence"
-    else:
-        fallback_reason = (
-            "host-agent-returned-grounded-with-evidence"
-            if mode == "GROUNDED"
-            else f"host-agent-returned-{mode.lower()}"
-        )
-    reason = str(payload.get("reason") or answer.get("reason") or fallback_reason)
-    payload["reason"] = reason
-    answer["reason"] = str(answer.get("reason") or reason)
-    payload.setdefault("tool_trace", [])
+    del request  # request identity is preserved only by unavailable helpers.
+    validate_query_response(payload)
     return payload
-
-
-def _coerce_metadata_field(field_name: str, value: Any, warnings: list[str]) -> dict[str, Any] | None:
-    if field_name not in METADATA_FIELD_KEYS:
-        warnings.append(f"unsupported field: {field_name}")
-        return None
-
-    if isinstance(value, dict):
-        field = dict(value)
-        field.setdefault("field_source", "host-agent")
-        return field
-
-    if isinstance(value, (str, list)) or value is None:
-        return {
-            "value": value,
-            "field_source": "host-agent",
-            "confidence": None,
-            "rationale": "Host agent returned a scalar/list field value.",
-        }
-
-    warnings.append(f"invalid field value: {field_name}")
-    return None
-
-
-def _people_field_from_entities(value: Any, warnings: list[str]) -> dict[str, Any] | None:
-    wrapper_field_source = "host-agent-entities"
-    wrapper_confidence: float | None = None
-    wrapper_rationale = ""
-    if isinstance(value, dict):
-        wrapper_field_source = str(value.get("field_source") or wrapper_field_source)
-        raw_wrapper_confidence = value.get("confidence")
-        if isinstance(raw_wrapper_confidence, (int, float)):
-            wrapper_confidence = float(raw_wrapper_confidence)
-        wrapper_rationale = str(value.get("rationale") or "").strip()
-        nested_value = value.get("value")
-        if isinstance(nested_value, dict) and isinstance(nested_value.get("people"), list):
-            value = nested_value["people"]
-        elif isinstance(value.get("people"), list):
-            value = value["people"]
-
-    if not isinstance(value, list):
-        warnings.append("invalid field value: entities")
-        return None
-
-    names: list[str] = []
-    confidences: list[float] = []
-    rationales: list[str] = []
-    for item in value:
-        if isinstance(item, str):
-            name = item.strip()
-            confidence = None
-            rationale = ""
-        elif isinstance(item, dict):
-            name = str(item.get("name") or "").strip()
-            raw_confidence = item.get("confidence")
-            confidence = raw_confidence if isinstance(raw_confidence, (int, float)) else None
-            rationale = str(item.get("rationale") or "").strip()
-        else:
-            continue
-
-        if not name:
-            continue
-        names.append(name)
-        if confidence is not None:
-            confidences.append(float(confidence))
-        if rationale:
-            rationales.append(rationale)
-
-    if not names:
-        warnings.append("invalid field value: entities")
-        return None
-
-    return {
-        "value": names,
-        "field_source": wrapper_field_source,
-        "confidence": wrapper_confidence if wrapper_confidence is not None else (
-            sum(confidences) / len(confidences) if confidences else None
-        ),
-        "rationale": wrapper_rationale or (" / ".join(rationales) if rationales else "Host agent returned entity names."),
-    }
-
-
-def _normalize_metadata_fields(raw_fields: Any, warnings: list[str]) -> dict[str, Any]:
-    if not isinstance(raw_fields, dict):
-        raise ValueError("host-agent-output-schema-invalid")
-
-    normalized: dict[str, Any] = {}
-    entity_alias: Any = None
-    for field_name, value in raw_fields.items():
-        original_name = str(field_name)
-        name = METADATA_FIELD_ALIASES.get(original_name, original_name)
-        if name == "entities":
-            entity_alias = value
-            continue
-        field = _coerce_metadata_field(name, value, warnings)
-        if field is not None and name not in normalized:
-            normalized[name] = field
-
-    if "people" not in normalized and entity_alias is not None:
-        people = _people_field_from_entities(entity_alias, warnings)
-        if people is not None:
-            normalized["people"] = people
-
-    return normalized
-
-
-def _looks_like_metadata_field_map(value: Any) -> bool:
-    if not isinstance(value, dict):
-        return False
-    for field_name in value:
-        name = METADATA_FIELD_ALIASES.get(str(field_name), str(field_name))
-        if name in METADATA_FIELD_KEYS or name == "entities":
-            return True
-    return False
 
 
 def _validate_metadata_payload(payload: dict[str, Any], request: BridgeMetadataRequest) -> dict[str, Any]:
-    fields = payload.get("fields")
-    if fields is None and isinstance(payload.get("proposed_metadata"), dict):
-        fields = payload["proposed_metadata"]
-        payload["fields"] = fields
-    if fields is None and isinstance(payload.get("metadata_proposal"), dict):
-        fields = payload["metadata_proposal"]
-        payload["fields"] = fields
-    if fields is None and isinstance(payload.get("proposed_fields"), dict):
-        fields = payload["proposed_fields"]
-        payload["fields"] = fields
-    proposal = payload.get("proposal")
-    if fields is None and isinstance(proposal, dict) and isinstance(proposal.get("fields"), dict):
-        fields = proposal["fields"]
-        payload["fields"] = fields
-    if fields is None and _looks_like_metadata_field_map(proposal):
-        fields = proposal
-        payload["fields"] = fields
-    if fields is None:
-        fields = {}
-        payload["fields"] = fields
-    warnings = payload.get("warnings")
-    if not isinstance(warnings, list):
-        warnings = []
-    fields = _normalize_metadata_fields(fields, warnings)
-    payload["fields"] = fields
+    """Validate a complete metadata envelope without aliases or coercion."""
 
-    mode = str(payload.get("mode") or "").strip().upper()
-    if not mode:
-        mode = "PROPOSED" if fields else "UNAVAILABLE"
-    payload["mode"] = mode
-
-    payload.setdefault("schema_version", f"{HOST_AGENT_SCHEMA_VERSION}.metadata_proposal.v1")
-    payload.setdefault("request_id", request.request_id)
-    if not payload.get("reason") and mode == "PROPOSED":
-        payload["reason"] = "semantic-fields-proposed-by-host-agent"
-    else:
-        payload.setdefault("reason", None)
-    payload["warnings"] = warnings
-    if not isinstance(payload.get("policy"), dict):
-        payload["policy"] = {
-            "preserve_user_fields": bool(
-                payload.get("preserve_user_fields", request.policy.get("preserve_user_fields", True))
-            )
-        }
+    del request
+    validate_metadata_proposal(payload)
     return payload
 
 
@@ -897,7 +793,7 @@ def _unavailable_query_response(
         trace[0]["returncode"] = runtime_result.returncode
         trace[0]["timed_out"] = runtime_result.timed_out
     return {
-        "schema_version": f"{HOST_AGENT_SCHEMA_VERSION}.query_response.v1",
+        "schema_version": QUERY_SCHEMA,
         "request_id": request.request_id,
         "conversation_id": request.conversation_id,
         "source": "host-agent",
@@ -917,42 +813,25 @@ def _unavailable_query_response(
     }
 
 
-def _metadata_sensitive_values(request: BridgeMetadataRequest) -> list[str]:
-    values: list[str] = []
-    for key in ("content", "title", "abstract"):
-        value = request.draft.get(key)
-        if isinstance(value, str) and len(value.strip()) >= 8:
-            values.append(value.strip())
-    existing = request.draft.get("existing_metadata")
-    if isinstance(existing, dict):
-        for value in existing.values():
-            if isinstance(value, str) and len(value.strip()) >= 8:
-                values.append(value.strip())
-    return values
-
-
-def _diagnostic_tail(text: str, request: BridgeMetadataRequest) -> str:
-    tail = (text or "")[-DIAGNOSTIC_TAIL_CHARS:]
-    for value in _metadata_sensitive_values(request):
-        tail = tail.replace(value, "[redacted-draft]")
-    return tail
-
-
 def _metadata_failure_diagnostics(
-    request: BridgeMetadataRequest,
     *,
     stage: str,
     runtime_result: RuntimeResult | None = None,
-    error: str | None = None,
+    reason: str | None = None,
+    error_type: str | None = None,
 ) -> dict[str, Any]:
     diagnostics: dict[str, Any] = {"stage": stage}
-    if error:
-        diagnostics["error"] = error
+    if reason:
+        diagnostics["reason"] = reason
+    if error_type:
+        diagnostics["error_type"] = error_type
     if runtime_result is not None:
         diagnostics["returncode"] = runtime_result.returncode
         diagnostics["timed_out"] = runtime_result.timed_out
-        diagnostics["stdout_tail"] = _diagnostic_tail(runtime_result.stdout, request)
-        diagnostics["stderr_tail"] = _diagnostic_tail(runtime_result.stderr, request)
+        diagnostics["stdout_present"] = bool(runtime_result.stdout)
+        diagnostics["stdout_length"] = len(runtime_result.stdout)
+        diagnostics["stderr_present"] = bool(runtime_result.stderr)
+        diagnostics["stderr_length"] = len(runtime_result.stderr)
     return diagnostics
 
 
@@ -967,25 +846,22 @@ def _with_metadata_timings(
     parse_ms: float | None = None,
     bridge_total_ms: float | None = None,
 ) -> dict[str, Any]:
-    next_payload = dict(payload)
-    diagnostics = next_payload.get("diagnostics")
+    diagnostics = payload.get("diagnostics")
     if not isinstance(diagnostics, dict):
-        diagnostics = {}
-    else:
-        diagnostics = dict(diagnostics)
-    timings = diagnostics.get("timings")
-    if not isinstance(timings, dict):
-        timings = {}
-    else:
-        timings = dict(timings)
+        return payload
+    if "timings" in diagnostics and not isinstance(diagnostics["timings"], dict):
+        return payload
+    next_payload = dict(payload)
+    next_diagnostics = dict(diagnostics)
+    timings = dict(diagnostics.get("timings", {}))
     if runtime_ms is not None:
         timings["runtime_ms"] = runtime_ms
     if parse_ms is not None:
         timings["parse_ms"] = parse_ms
     if bridge_total_ms is not None:
         timings["bridge_total_ms"] = bridge_total_ms
-    diagnostics["timings"] = timings
-    next_payload["diagnostics"] = diagnostics
+    next_diagnostics["timings"] = timings
+    next_payload["diagnostics"] = next_diagnostics
     return next_payload
 
 
@@ -996,7 +872,7 @@ def _unavailable_metadata_response(
     diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
-        "schema_version": f"{HOST_AGENT_SCHEMA_VERSION}.metadata_proposal.v1",
+        "schema_version": METADATA_SCHEMA,
         "request_id": request.request_id,
         "mode": "UNAVAILABLE",
         "reason": reason,
@@ -1009,6 +885,21 @@ def _unavailable_metadata_response(
     return payload
 
 
+def _unavailable_metadata_for_codex(
+    request: BridgeMetadataRequest,
+    reason: str,
+    *,
+    diagnostics: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a metadata terminal envelope with named-adapter diagnostics only."""
+
+    return _unavailable_metadata_response(
+        request,
+        reason,
+        diagnostics=_sanitize_codex_diagnostics(diagnostics),
+    )
+
+
 def _sse_frame(event_type: str, data: dict[str, Any]) -> str:
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"event: {event_type}\ndata: {text}\n\n"
@@ -1016,7 +907,20 @@ def _sse_frame(event_type: str, data: dict[str, Any]) -> str:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return _check_runtime()
+    try:
+        selected_kind = _selected_adapter_kind()
+    except CodexAdapterError:
+        payload = unavailable_health(ADAPTER_KIND_INVALID_REASON)
+        payload["runtime"] = {"kind": "host-agent-reference", "interface_version": "v1"}
+        payload["checks"][0]["name"] = "adapter_kind"
+        payload["checks"][0]["reason"] = ADAPTER_KIND_INVALID_REASON
+    else:
+        payload = codex_health_payload() if selected_kind == CODEX_CLI_KIND else _check_runtime()
+    try:
+        validate_health(payload)
+    except ValueError:
+        return unavailable_health("host-agent-envelope-invalid")
+    return payload
 
 
 @app.post("/query/stream")
@@ -1026,6 +930,59 @@ async def query_stream(request: BridgeQueryRequest) -> StreamingResponse:
             "status",
             {"phase": "calling_host_agent", "message": "Calling configured host agent runtime."},
         )
+
+        try:
+            selected_kind = _selected_adapter_kind()
+        except CodexAdapterError as exc:
+            yield _sse_frame(
+                "final",
+                _unavailable_query_for_codex(
+                    request,
+                    ADAPTER_KIND_INVALID_REASON,
+                    {"stage": "adapter-selection", **exc.diagnostics},
+                ),
+            )
+            return
+
+        if selected_kind == CODEX_CLI_KIND:
+            try:
+                procedure_prompt, source_id = load_configured_prompt("query")
+            except CodexAdapterError as exc:
+                yield _sse_frame(
+                    "final",
+                    _unavailable_query_for_codex(
+                        request,
+                        exc.reason,
+                        {"stage": "codex-prompt-asset", **exc.diagnostics},
+                    ),
+                )
+                return
+            try:
+                adapter = CodexCLIAdapter(
+                    executable=configured_codex_executable(),
+                    timeout_seconds=configured_timeout_seconds(),
+                )
+                result = await adapter.query(
+                    request.model_dump(),
+                    procedure_prompt=procedure_prompt,
+                    source_id=source_id,
+                )
+                payload = _validate_codex_query_payload(request, result.payload, result.diagnostics)
+            except CodexAdapterError as exc:
+                payload = _unavailable_query_for_codex(
+                    request,
+                    exc.reason,
+                    {"stage": "codex-adapter", **exc.diagnostics},
+                )
+            except Exception as exc:  # defensive named-adapter boundary
+                payload = _unavailable_query_for_codex(
+                    request,
+                    "codex-process-unavailable",
+                    {"stage": "codex-adapter", "error_type": type(exc).__name__},
+                )
+            yield _sse_frame("final", payload)
+            return
+
         runtime_result: RuntimeResult | None = None
         try:
             async for event_type, data in _run_runtime_stream(_query_prompt(request)):
@@ -1050,9 +1007,12 @@ async def query_stream(request: BridgeQueryRequest) -> StreamingResponse:
             return
 
         try:
-            payload = _validate_query_payload(_extract_json_object(runtime_result.stdout), request)
-        except ValueError as exc:
-            yield _sse_frame("final", _unavailable_query_response(request, str(exc), runtime_result))
+            payload = _validate_query_payload(parse_exact_json_object(runtime_result.stdout), request)
+        except ValueError:
+            yield _sse_frame(
+                "final",
+                _unavailable_query_response(request, "host-agent-envelope-invalid", runtime_result),
+            )
             return
         yield _sse_frame("final", payload)
 
@@ -1062,6 +1022,54 @@ async def query_stream(request: BridgeQueryRequest) -> StreamingResponse:
 @app.post("/metadata/propose")
 async def metadata_propose(request: BridgeMetadataRequest) -> dict[str, Any]:
     bridge_start = time.perf_counter()
+
+    try:
+        selected_kind = _selected_adapter_kind()
+    except CodexAdapterError as exc:
+        payload = _unavailable_metadata_for_codex(
+            request,
+            ADAPTER_KIND_INVALID_REASON,
+            diagnostics={"stage": "adapter-selection", **exc.diagnostics},
+        )
+        return _with_metadata_timings(payload, bridge_total_ms=_elapsed_ms(bridge_start))
+
+    if selected_kind == CODEX_CLI_KIND:
+        try:
+            procedure_prompt, source_id = load_configured_prompt("metadata")
+        except CodexAdapterError as exc:
+            payload = _unavailable_metadata_for_codex(
+                request,
+                exc.reason,
+                diagnostics={"stage": "codex-prompt-asset", **exc.diagnostics},
+            )
+            return _with_metadata_timings(payload, bridge_total_ms=_elapsed_ms(bridge_start))
+        try:
+            adapter = CodexCLIAdapter(
+                executable=configured_codex_executable(),
+                timeout_seconds=configured_timeout_seconds(),
+            )
+            result = await adapter.metadata(
+                request.model_dump(),
+                procedure_prompt=procedure_prompt,
+                source_id=source_id,
+            )
+            payload = _validate_codex_metadata_payload(request, result.payload, result.diagnostics)
+            return _with_metadata_timings(payload, bridge_total_ms=_elapsed_ms(bridge_start))
+        except CodexAdapterError as exc:
+            payload = _unavailable_metadata_for_codex(
+                request,
+                exc.reason,
+                diagnostics={"stage": "codex-adapter", **exc.diagnostics},
+            )
+            return _with_metadata_timings(payload, bridge_total_ms=_elapsed_ms(bridge_start))
+        except Exception as exc:  # defensive named-adapter boundary
+            payload = _unavailable_metadata_for_codex(
+                request,
+                "codex-process-unavailable",
+                diagnostics={"stage": "codex-adapter", "error_type": type(exc).__name__},
+            )
+            return _with_metadata_timings(payload, bridge_total_ms=_elapsed_ms(bridge_start))
+
     runtime_ms: float | None = None
     try:
         runtime_start = time.perf_counter()
@@ -1072,9 +1080,8 @@ async def metadata_propose(request: BridgeMetadataRequest) -> dict[str, Any]:
             request,
             RUNTIME_UNCONFIGURED_REASON,
             diagnostics=_metadata_failure_diagnostics(
-                request,
                 stage="bridge-metadata-runtime",
-                error=str(exc),
+                error_type=type(exc).__name__,
             ),
         )
         return _with_metadata_timings(payload, bridge_total_ms=_elapsed_ms(bridge_start))
@@ -1084,7 +1091,6 @@ async def metadata_propose(request: BridgeMetadataRequest) -> dict[str, Any]:
             request,
             "host-agent-runtime-timeout",
             diagnostics=_metadata_failure_diagnostics(
-                request,
                 stage="bridge-metadata-runtime",
                 runtime_result=runtime_result,
             ),
@@ -1099,7 +1105,6 @@ async def metadata_propose(request: BridgeMetadataRequest) -> dict[str, Any]:
             request,
             "host-agent-runtime-failed",
             diagnostics=_metadata_failure_diagnostics(
-                request,
                 stage="bridge-metadata-runtime",
                 runtime_result=runtime_result,
             ),
@@ -1112,7 +1117,7 @@ async def metadata_propose(request: BridgeMetadataRequest) -> dict[str, Any]:
 
     try:
         parse_start = time.perf_counter()
-        payload = _validate_metadata_payload(_extract_json_object(runtime_result.stdout), request)
+        payload = _validate_metadata_payload(parse_exact_json_object(runtime_result.stdout), request)
         parse_ms = _elapsed_ms(parse_start)
         return _with_metadata_timings(
             payload,
@@ -1120,16 +1125,15 @@ async def metadata_propose(request: BridgeMetadataRequest) -> dict[str, Any]:
             parse_ms=parse_ms,
             bridge_total_ms=_elapsed_ms(bridge_start),
         )
-    except ValueError as exc:
+    except ValueError:
         parse_ms = _elapsed_ms(parse_start) if "parse_start" in locals() else None
         payload = _unavailable_metadata_response(
             request,
-            str(exc),
+            "host-agent-envelope-invalid",
             diagnostics=_metadata_failure_diagnostics(
-                request,
                 stage="bridge-metadata-parse",
                 runtime_result=runtime_result,
-                error=str(exc),
+                reason="host-agent-envelope-invalid",
             ),
         )
         return _with_metadata_timings(

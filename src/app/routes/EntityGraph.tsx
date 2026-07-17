@@ -60,7 +60,7 @@ const REVIEW_ACTION_OPERATIONS = new Set<ReviewActionOperation>([
   'skip',
 ]);
 
-const REVIEW_CARDS_MIN_CLI_VERSION = '1.4.4';
+const REVIEW_CARDS_MIN_CLI_VERSION = '1.4.5';
 
 const TYPE_OPTIONS: { value: EntityType; i18nKey: string }[] = [
   { value: 'all', i18nKey: 'entityTypeAll' },
@@ -72,18 +72,17 @@ const TYPE_OPTIONS: { value: EntityType; i18nKey: string }[] = [
   { value: 'concept', i18nKey: 'entityTypeConcept' },
 ];
 
-function versionParts(version: string): number[] {
-  return version
-    .split(/[.-]/)
-    .slice(0, 3)
-    .map((part) => Number.parseInt(part, 10))
-    .map((part) => (Number.isFinite(part) ? part : 0));
+function versionParts(version: string): number[] | null {
+  const normalized = version.trim();
+  if (!/^\d+\.\d+\.\d+$/.test(normalized)) return null;
+  return normalized.split('.').map((part) => Number.parseInt(part, 10));
 }
 
 function isVersionBelow(current: string | null | undefined, minimum: string): boolean {
-  if (!current) return false;
+  if (!current) return true;
   const currentParts = versionParts(current);
   const minimumParts = versionParts(minimum);
+  if (!currentParts || !minimumParts) return true;
   for (let index = 0; index < Math.max(currentParts.length, minimumParts.length); index += 1) {
     const currentPart = currentParts[index] ?? 0;
     const minimumPart = minimumParts[index] ?? 0;
@@ -107,48 +106,51 @@ export default function EntityGraph() {
   const previewMutation = useEntityMutationPreview();
   const confirmMutation = useEntityMutationConfirm();
   const versionQuery = useVersionCheck();
+  const cliFeatureEnabled = versionQuery.data?.compatible === true;
 
   const {
     data: statsData,
     isLoading: statsLoading,
     isError: statsError,
     isFetching: statsFetching,
-  } = useEntityStats();
+  } = useEntityStats(cliFeatureEnabled);
 
   const {
     data: listData,
     isLoading: listLoading,
     isError: listError,
-  } = useEntityList(entityTypeFilter === 'all' ? undefined : entityTypeFilter);
+  } = useEntityList(
+    entityTypeFilter === 'all' ? undefined : entityTypeFilter,
+    cliFeatureEnabled,
+  );
 
   const {
     data: checkData,
     isLoading: checkLoading,
     isError: checkError,
-  } = useEntityCheck();
+  } = useEntityCheck(cliFeatureEnabled);
 
   const {
     data: auditData,
     isLoading: auditLoading,
     isError: auditError,
-  } = useEntityAudit();
+  } = useEntityAudit(cliFeatureEnabled);
 
   const {
     data: reviewData,
     isLoading: reviewLoading,
     isError: reviewError,
-  } = useEntityReview();
+  } = useEntityReview(cliFeatureEnabled);
 
   const {
     data: candidateEdgesData,
     isLoading: candidateEdgesLoading,
     isError: candidateEdgesError,
-  } = useEntityCandidateEdges();
+  } = useEntityCandidateEdges(undefined, cliFeatureEnabled);
 
-  const reviewActionsBlocked = isVersionBelow(
-    versionQuery.data?.cli_package_version,
-    REVIEW_CARDS_MIN_CLI_VERSION,
-  );
+  const reviewActionsBlocked =
+    !cliFeatureEnabled
+    || isVersionBelow(versionQuery.data?.cli_package_version, REVIEW_CARDS_MIN_CLI_VERSION);
 
   function handleRetry() {
     queryClient.invalidateQueries({ queryKey: ['entities'] });
@@ -242,6 +244,7 @@ export default function EntityGraph() {
           entities={listData ?? []}
           previewMutation={previewMutation}
           confirmMutation={confirmMutation}
+          featureCallsEnabled={cliFeatureEnabled}
         />
       </GlassCard>
 
@@ -1040,6 +1043,7 @@ function MutationSection({
   entities,
   previewMutation,
   confirmMutation,
+  featureCallsEnabled,
 }: {
   t: (key: string) => string;
   entities: EntityItem[];
@@ -1051,6 +1055,7 @@ function MutationSection({
     mutateAsync: (request: EntityMutationRequest) => Promise<EntityMutationConfirmResponse>;
     isPending: boolean;
   };
+  featureCallsEnabled: boolean;
 }) {
   const [deleteEntityId, setDeleteEntityId] = useState('');
   const [mergeSourceId, setMergeSourceId] = useState('');
@@ -1137,7 +1142,7 @@ function MutationSection({
           </select>
           <button
             type="button"
-            disabled={!canPreviewDelete || previewMutation.isPending}
+            disabled={!featureCallsEnabled || !canPreviewDelete || previewMutation.isPending}
             onClick={() => handlePreview({ operation: 'delete', entityId: selectedDeleteId })}
             data-testid="entity-delete-preview"
             className="px-4 py-2 rounded-lg text-sm border border-white/[0.08] text-[var(--color-primary)] bg-[var(--color-ether-surface-ghost)] disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1183,7 +1188,7 @@ function MutationSection({
           </div>
           <button
             type="button"
-            disabled={!canPreviewMerge || previewMutation.isPending}
+            disabled={!featureCallsEnabled || !canPreviewMerge || previewMutation.isPending}
             onClick={() =>
               handlePreview({
                 operation: 'merge_as_alias',

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 
@@ -11,7 +12,7 @@ from backend import config
 
 logger = logging.getLogger(__name__)
 
-MIN_SUPPORTED_CLI_VERSION = "1.3.7"
+MIN_SUPPORTED_CLI_VERSION = "1.4.5"
 
 
 class CLIError(Exception):
@@ -88,6 +89,9 @@ class CLIAdapter:
         timeout: float | None = None,
     ) -> bytes:
         """Run a CLI command and return raw stdout bytes."""
+        if not _is_handshake_call(args):
+            await self._ensure_cli_compatible()
+
         cmd = [*shlex.split(self._command), *args]
         effective_timeout = timeout or self._timeout
 
@@ -117,12 +121,35 @@ class CLIAdapter:
 
         return completed.stdout
 
+    async def _ensure_cli_compatible(self) -> None:
+        """Fail closed before any feature CLI command below the GUI floor."""
+        version_probe = await self._probe_cli_version()
+        if version_probe.get("compatible") is True:
+            return
+
+        error = version_probe.get("error")
+        error_data = error if isinstance(error, dict) else {}
+        code = str(error_data.get("code") or "CLI_VERSION_UNSUPPORTED")
+        package_version = version_probe.get("package_version") or "unknown"
+        minimum = version_probe.get("minimum_supported_version") or MIN_SUPPORTED_CLI_VERSION
+        message = str(
+            error_data.get("message")
+            or f"Life Index CLI {package_version} is incompatible; GUI requires CLI {minimum} or newer."
+        )
+        payload = {
+            "ok": False,
+            "error": {"code": code, "message": message},
+        }
+        raise CLIError(-2, json.dumps(payload, ensure_ascii=False))
+
     async def run_json(
         self,
         args: list[str],
         timeout: float | None = None,
     ) -> dict | list:
         """Run a CLI command and parse JSON output."""
+        if not _is_handshake_call(args):
+            await self._ensure_cli_compatible()
         stdout = await self.run(args, timeout=timeout)
         text = stdout.strip()
         if not text:
@@ -137,12 +164,7 @@ class CLIAdapter:
         by the shorter general-purpose ``CLI_TIMEOUT``.
         """
         try:
-            version_payload = await self.run_json(
-                ["version"], timeout=self._health_timeout
-            )
-            health_payload = await self.run_json(
-                ["health"], timeout=self._health_timeout
-            )
+            version_probe = await self._probe_cli_version()
         except CLIError as exc:
             return {
                 "status": "degraded",
@@ -158,20 +180,37 @@ class CLIAdapter:
                 },
             }
 
-        version_data = version_payload if isinstance(version_payload, dict) else {}
-        health_data = health_payload if isinstance(health_payload, dict) else {}
-        manifest = version_data.get("bootstrap_manifest")
-        manifest_data = manifest if isinstance(manifest, dict) else {}
+        if version_probe.get("compatible") is not True:
+            return version_probe
 
-        package_version = (
-            version_data.get("package_version")
-            or version_data.get("version")
-            or version_data.get("repo_version")
-        )
-        repo_version = manifest_data.get("repo_version") or version_data.get(
-            "repo_version"
-        )
-        compatible = _version_gte(package_version, MIN_SUPPORTED_CLI_VERSION)
+        try:
+            health_payload = await self.run_json(
+                ["health"], timeout=self._health_timeout
+            )
+        except CLIError as exc:
+            return {
+                "status": "degraded",
+                "cli_available": True,
+                "compatible": True,
+                "package_version": version_probe["package_version"],
+                "repo_version": version_probe["repo_version"],
+                "minimum_supported_version": version_probe["minimum_supported_version"],
+                "health": None,
+                "error": {
+                    "returncode": exc.returncode,
+                    "message": exc.stderr or exc.stdout,
+                },
+            }
+        except (TypeError, ValueError) as exc:
+            return _invalid_health_result(version_probe, f"Life Index CLI returned invalid health JSON: {exc}")
+
+        if not isinstance(health_payload, dict):
+            return _invalid_health_result(
+                version_probe,
+                "Life Index CLI returned a non-object health JSON payload.",
+            )
+
+        health_data = health_payload
         health_body = health_data.get("data")
         health_body_data = health_body if isinstance(health_body, dict) else {}
         health_status = str(
@@ -181,14 +220,22 @@ class CLIAdapter:
         healthy = health_success and health_status in {"", "ok", "healthy", "pass"}
 
         return {
-            "status": "ok" if compatible and healthy else "degraded",
-            "cli_available": True,
-            "compatible": compatible,
-            "package_version": package_version,
-            "repo_version": repo_version,
-            "minimum_supported_version": MIN_SUPPORTED_CLI_VERSION,
+            **version_probe,
+            "status": "ok" if healthy else "degraded",
             "health": health_data,
         }
+
+    async def _probe_cli_version(self) -> dict:
+        """Probe and normalize only the CLI version for feature gating."""
+        try:
+            version_payload = await self.run_json(
+                ["version"], timeout=self._health_timeout
+            )
+        except (TypeError, ValueError) as exc:
+            return _invalid_version_result(
+                f"Life Index CLI returned invalid version JSON: {exc}"
+            )
+        return _normalize_version_payload(version_payload)
 
     async def data_audit(self) -> dict:
         """Run ``health --data-audit`` and return the CLI payload.
@@ -324,6 +371,8 @@ class CLIAdapter:
 
         Prevents concurrent CLI writes from conflicting on CLI-maintained metadata.
         """
+        if not _is_handshake_call(args):
+            await self._ensure_cli_compatible()
         async with self._write_lock:
             return await self.run(args, timeout=timeout)
 
@@ -337,20 +386,91 @@ def _safe_json_stdout(exc: CLIError, fallback: dict) -> dict:
         return fallback
 
 
+def _normalize_version_payload(payload: object) -> dict:
+    """Normalize a version response using one strict compatibility policy."""
+    version_data = payload if isinstance(payload, dict) else {}
+    manifest = version_data.get("bootstrap_manifest")
+    manifest_data = manifest if isinstance(manifest, dict) else {}
+    package_version = (
+        version_data.get("package_version")
+        or version_data.get("version")
+        or version_data.get("repo_version")
+    )
+    repo_version = manifest_data.get("repo_version") or version_data.get(
+        "repo_version"
+    )
+    result = {
+        "status": "degraded",
+        "cli_available": True,
+        "compatible": False,
+        "package_version": package_version,
+        "repo_version": repo_version,
+        "minimum_supported_version": MIN_SUPPORTED_CLI_VERSION,
+        "health": None,
+    }
+    if _version_parts(package_version) is None:
+        result["error"] = {
+            "code": "CLI_VERSION_INVALID",
+            "message": (
+                "Life Index CLI reported an unparseable version "
+                f"{package_version or 'unknown'!r}; GUI requires CLI "
+                f"{MIN_SUPPORTED_CLI_VERSION} or newer."
+            ),
+        }
+        return result
+    if not _version_gte(package_version, MIN_SUPPORTED_CLI_VERSION):
+        result["error"] = {
+            "code": "CLI_VERSION_UNSUPPORTED",
+            "message": (
+                f"Life Index CLI {package_version} is below the GUI minimum "
+                f"CLI {MIN_SUPPORTED_CLI_VERSION}; upgrade the CLI before using GUI data features."
+            ),
+        }
+        return result
+    result["status"] = "ok"
+    result["compatible"] = True
+    return result
+
+
+def _invalid_version_result(message: str) -> dict:
+    """Return the structured result for malformed version JSON."""
+    result = _normalize_version_payload(None)
+    result["error"]["message"] = message
+    return result
+
+
+def _invalid_health_result(version_probe: dict, message: str) -> dict:
+    """Return a degraded handshake result for malformed health JSON."""
+    return {
+        **version_probe,
+        "status": "degraded",
+        "health": None,
+        "error": {
+            "code": "CLI_HEALTH_INVALID",
+            "message": message,
+        },
+    }
+
+
 def _version_gte(actual: str | None, minimum: str) -> bool:
-    """Compare dotted numeric versions, ignoring non-numeric suffixes."""
-    if not actual:
+    """Compare strictly parseable dotted numeric versions."""
+    actual_parts = _version_parts(actual)
+    minimum_parts = _version_parts(minimum)
+    if actual_parts is None or minimum_parts is None:
         return False
-    return _version_parts(actual) >= _version_parts(minimum)
+    return actual_parts >= minimum_parts
 
 
-def _version_parts(value: str) -> tuple[int, ...]:
-    parts: list[int] = []
-    for chunk in value.split("."):
-        digits = []
-        for char in chunk:
-            if not char.isdigit():
-                break
-            digits.append(char)
-        parts.append(int("".join(digits) or "0"))
-    return tuple(parts)
+def _version_parts(value: str | None) -> tuple[int, ...] | None:
+    """Parse only an exact MAJOR.MINOR.PATCH CLI version."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", normalized):
+        return None
+    return tuple(int(part) for part in normalized.split("."))
+
+
+def _is_handshake_call(args: list[str]) -> bool:
+    """Allow only the exact version/health probes used by ``handshake``."""
+    return args in (["version"], ["health"])

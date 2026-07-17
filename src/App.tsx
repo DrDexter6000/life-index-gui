@@ -1,5 +1,10 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import {
+  createBrowserRouter,
+  Navigate,
+  RouterProvider,
+  type RouteObject,
+} from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './Layout';
 import { ErrorBoundary } from '@/components/celestial/ErrorBoundary';
@@ -30,44 +35,61 @@ const queryClient = new QueryClient({
   },
 });
 
-export default function App() {
+export const appRoutes: RouteObject[] = [
+  {
+    element: <Layout />,
+    children: [
+      { path: '/', element: <TheCore /> },
+      { path: '/home', element: <TheCore /> },
+      { path: '/recall', element: <Recall /> },
+      { path: '/archives', element: <Archives /> },
+
+      // Unified Diagnostic Center
+      {
+        path: '/maintenance',
+        element: <DiagnosticCenterLayout />,
+        children: [
+          { index: true, element: <Navigate to="/maintenance/health" replace /> },
+          { path: 'health', element: <HealthCenter /> },
+          { path: 'host-agent', element: <HostAgentGuide /> },
+          { path: 'entities', element: <EntityGraph /> },
+          { path: 'index', element: <IndexDiagnostics /> },
+          { path: 'index-tree', element: <IndexTreeDiagnostics /> },
+        ],
+      },
+
+      // Legacy redirect
+      { path: '/entities', element: <Navigate to="/maintenance/entities" replace /> },
+      { path: '/entities/:entityId', element: <EntityProfile /> },
+
+      {
+        path: '/journal/*',
+        element: (
+          <ErrorBoundary>
+            <JournalDetail />
+          </ErrorBoundary>
+        ),
+      },
+      { path: '/import', element: <ImportWorkflow /> },
+      { path: '/onboarding', element: <EmptyState /> },
+      { path: '/link', element: <PublicLinkExchange /> },
+    ],
+  },
+];
+
+export function createAppRouter() {
+  return createBrowserRouter(appRoutes);
+}
+
+const browserRouter = createAppRouter();
+type AppRouter = ReturnType<typeof createAppRouter>;
+
+export default function App({ router = browserRouter }: { router?: AppRouter } = {}) {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Suspense fallback={<div data-testid="suspense-fallback" />}>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route path="/" element={<TheCore />} />
-              <Route path="/home" element={<TheCore />} />
-              <Route path="/recall" element={<Recall />} />
-              <Route path="/archives" element={<Archives />} />
-
-              {/* Unified Diagnostic Center */}
-              <Route path="/maintenance" element={<DiagnosticCenterLayout />}>
-                <Route index element={<Navigate to="/maintenance/health" replace />} />
-                <Route path="health" element={<HealthCenter />} />
-                <Route path="host-agent" element={<HostAgentGuide />} />
-                <Route path="entities" element={<EntityGraph />} />
-                <Route path="index" element={<IndexDiagnostics />} />
-                <Route path="index-tree" element={<IndexTreeDiagnostics />} />
-              </Route>
-
-              {/* Legacy redirect */}
-              <Route path="/entities" element={<Navigate to="/maintenance/entities" replace />} />
-              <Route path="/entities/:entityId" element={<EntityProfile />} />
-
-              <Route path="/journal/*" element={
-                <ErrorBoundary>
-                  <JournalDetail />
-                </ErrorBoundary>
-              } />
-              <Route path="/import" element={<ImportWorkflow />} />
-              <Route path="/onboarding" element={<EmptyState />} />
-              <Route path="/link" element={<PublicLinkExchange />} />
-            </Route>
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
+      <Suspense fallback={<div data-testid="suspense-fallback" />}>
+        <RouterProvider router={router} />
+      </Suspense>
     </QueryClientProvider>
   );
 }

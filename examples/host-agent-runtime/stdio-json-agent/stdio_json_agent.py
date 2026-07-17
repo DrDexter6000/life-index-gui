@@ -98,7 +98,7 @@ def main() -> int:
     if is_metadata:
         payload = _metadata_response(request)
     else:
-        print("Reading deterministic demo evidence through stdio-json-agent.", flush=True)
+        print("Reading deterministic demo evidence through stdio-json-agent.", file=sys.stderr, flush=True)
         payload = _query_response(request)
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     return 0

@@ -1,6 +1,7 @@
 """Tests for CLIAdapter — subprocess wrapper and error handling."""
 
 import asyncio
+import json
 import shlex
 import subprocess
 import sys
@@ -70,7 +71,7 @@ async def test_run_timeout(adapter):
 @pytest.mark.asyncio
 async def test_run_json_success(adapter):
     """CLIAdapter.run_json parses JSON output."""
-    with patch(
+    with patch.object(adapter, "_probe_cli_version", AsyncMock(return_value={"compatible": True})), patch(
         "backend.adapter.cli_adapter.subprocess.run",
         return_value=_completed(0, b'{"key": "value"}', b""),
     ):
@@ -82,7 +83,7 @@ async def test_run_json_success(adapter):
 @pytest.mark.asyncio
 async def test_run_json_empty(adapter):
     """CLIAdapter.run_json returns {} for empty stdout."""
-    with patch(
+    with patch.object(adapter, "_probe_cli_version", AsyncMock(return_value={"compatible": True})), patch(
         "backend.adapter.cli_adapter.subprocess.run",
         return_value=_completed(0, b"   ", b""),
     ):
@@ -123,8 +124,8 @@ async def test_handshake_runs_version_and_health(adapter):
         calls.append(args)
         if args == ["version"]:
             return {
-                "package_version": "1.3.7",
-                "bootstrap_manifest": {"repo_version": "1.3.7"},
+                "package_version": "1.4.5",
+                "bootstrap_manifest": {"repo_version": "1.4.5"},
             }
         if args == ["health"]:
             return {"status": "healthy", "journal_count": 3}
@@ -137,31 +138,202 @@ async def test_handshake_runs_version_and_health(adapter):
     assert result["cli_available"] is True
     assert result["compatible"] is True
     assert result["status"] == "ok"
-    assert result["package_version"] == "1.3.7"
-    assert result["repo_version"] == "1.3.7"
+    assert result["package_version"] == "1.4.5"
+    assert result["repo_version"] == "1.4.5"
+    assert result["minimum_supported_version"] == "1.4.5"
     assert result["health"]["journal_count"] == 3
 
 
 @pytest.mark.asyncio
-async def test_handshake_marks_pre_1_3_7_cli_incompatible(adapter):
+async def test_handshake_marks_pre_1_4_5_cli_incompatible(adapter):
     """CLIAdapter.handshake rejects CLI releases below the GUI minimum."""
+    calls = []
 
     async def fake_run_json(args, timeout=None):
+        calls.append(args)
         if args == ["version"]:
             return {
-                "package_version": "1.2.1",
-                "bootstrap_manifest": {"repo_version": "1.2.1"},
+                "package_version": "1.4.4",
+                "bootstrap_manifest": {"repo_version": "1.4.4"},
             }
-        if args == ["health"]:
-            return {"status": "healthy", "journal_count": 3}
-        raise AssertionError(f"unexpected command: {args}")
+        raise AssertionError("health must not run before an unsupported CLI feature call")
 
     with patch.object(adapter, "run_json", side_effect=fake_run_json):
         result = await adapter.handshake()
 
     assert result["cli_available"] is True
     assert result["compatible"] is False
-    assert result["minimum_supported_version"] == "1.3.7"
+    assert result["minimum_supported_version"] == "1.4.5"
+    assert calls == [["version"]]
+    assert result["error"]["code"] == "CLI_VERSION_UNSUPPORTED"
+    assert "upgrade" in result["error"]["message"].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["not-a-version", "1.5", "1.4.5-rc.1"])
+async def test_handshake_rejects_unparseable_cli_version_before_health_probe(adapter, version):
+    """Malformed CLI versions fail closed with an actionable diagnostic."""
+    calls = []
+
+    async def fake_run_json(args, timeout=None):
+        calls.append(args)
+        if args == ["version"]:
+            return {"package_version": version}
+        raise AssertionError("health must not run after an unparseable version")
+
+    with patch.object(adapter, "run_json", side_effect=fake_run_json):
+        result = await adapter.handshake()
+
+    assert calls == [["version"]]
+    assert result["cli_available"] is True
+    assert result["compatible"] is False
+    assert result["status"] == "degraded"
+    assert result["minimum_supported_version"] == "1.4.5"
+    assert result["error"]["code"] == "CLI_VERSION_INVALID"
+    assert "1.4.5" in result["error"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version_payload", [None, [], "1.4.5"])
+async def test_handshake_rejects_non_object_version_json_before_health_probe(
+    adapter,
+    version_payload,
+):
+    """Non-object version JSON fails closed before probing health."""
+    calls = []
+
+    async def fake_run_json(args, timeout=None):
+        calls.append(args)
+        if args == ["version"]:
+            return version_payload
+        raise AssertionError("health must not run after an invalid version payload")
+
+    with patch.object(adapter, "run_json", side_effect=fake_run_json):
+        result = await adapter.handshake()
+
+    assert calls == [["version"]]
+    assert result["status"] == "degraded"
+    assert result["compatible"] is False
+    assert result["error"]["code"] == "CLI_VERSION_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_handshake_rejects_malformed_version_json_before_health_probe(adapter):
+    """Malformed version JSON becomes a structured compatibility error."""
+    calls = []
+
+    async def fake_run_json(args, timeout=None):
+        calls.append(args)
+        if args == ["version"]:
+            raise json.JSONDecodeError("invalid JSON", "{", 0)
+        raise AssertionError("health must not run after malformed version JSON")
+
+    with patch.object(adapter, "run_json", side_effect=fake_run_json):
+        result = await adapter.handshake()
+
+    assert calls == [["version"]]
+    assert result["status"] == "degraded"
+    assert result["cli_available"] is True
+    assert result["compatible"] is False
+    assert result["error"]["code"] == "CLI_VERSION_INVALID"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("health_payload", [None, [], "healthy"])
+async def test_handshake_rejects_non_object_health_json(adapter, health_payload):
+    """Non-object health JSON becomes a structured degraded result."""
+    calls = []
+
+    async def fake_run_json(args, timeout=None):
+        calls.append(args)
+        if args == ["version"]:
+            return {"package_version": "1.4.5"}
+        if args == ["health"]:
+            return health_payload
+        raise AssertionError(f"unexpected command: {args}")
+
+    with patch.object(adapter, "run_json", side_effect=fake_run_json):
+        result = await adapter.handshake()
+
+    assert calls == [["version"], ["health"]]
+    assert result["status"] == "degraded"
+    assert result["cli_available"] is True
+    assert result["compatible"] is True
+    assert result["health"] is None
+    assert result["error"]["code"] == "CLI_HEALTH_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_handshake_rejects_malformed_health_json(adapter):
+    """Malformed health JSON becomes a structured degraded result."""
+    async def fake_run_json(args, timeout=None):
+        if args == ["version"]:
+            return {"package_version": "1.4.5"}
+        if args == ["health"]:
+            raise json.JSONDecodeError("invalid JSON", "{", 0)
+        raise AssertionError(f"unexpected command: {args}")
+
+    with patch.object(adapter, "run_json", side_effect=fake_run_json):
+        result = await adapter.handshake()
+
+    assert result["status"] == "degraded"
+    assert result["compatible"] is True
+    assert result["health"] is None
+    assert result["error"]["code"] == "CLI_HEALTH_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_feature_compatibility_probe_reads_version_without_health(adapter):
+    """Feature gating performs a version-only probe instead of full handshake."""
+    calls = []
+
+    async def fake_run_json(args, timeout=None):
+        calls.append(args)
+        if args == ["version"]:
+            return {"package_version": "1.4.5"}
+        raise AssertionError(f"unexpected compatibility probe command: {args}")
+
+    with patch.object(adapter, "run_json", side_effect=fake_run_json):
+        await adapter._ensure_cli_compatible()
+
+    assert calls == [["version"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        ("run_json", ["search", "--query", "blocked"]),
+        ("run_bytes", ["attachment", "media", "blocked.bin"]),
+        ("run_serialized", ["write", "--json"]),
+    ],
+)
+async def test_protected_cli_calls_fail_before_subprocess_on_incompatible_cli(
+    adapter,
+    method_name,
+    args,
+):
+    """Every feature call is blocked before subprocess execution below the CLI floor."""
+    with patch.object(
+        adapter,
+        "_probe_cli_version",
+        AsyncMock(
+            return_value={
+                "status": "degraded",
+                "cli_available": True,
+                "compatible": False,
+                "package_version": "1.4.4",
+                "minimum_supported_version": "1.4.5",
+            }
+        ),
+    ), patch("backend.adapter.cli_adapter.subprocess.run") as subprocess_run:
+        with pytest.raises(CLIError) as exc_info:
+            await getattr(adapter, method_name)(args)
+
+    payload = json.loads(exc_info.value.stderr)
+    assert payload["error"]["code"] == "CLI_VERSION_UNSUPPORTED"
+    assert "1.4.5" in payload["error"]["message"]
+    subprocess_run.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -170,7 +342,7 @@ async def test_handshake_uses_nested_health_status(adapter):
 
     async def fake_run_json(args, timeout=None):
         if args == ["version"]:
-            return {"package_version": "1.3.7"}
+            return {"package_version": "1.4.5"}
         if args == ["health"]:
             return {"success": True, "data": {"status": "degraded"}}
         raise AssertionError(f"unexpected command: {args}")
@@ -186,7 +358,7 @@ async def test_handshake_uses_nested_health_status(adapter):
 @pytest.mark.asyncio
 async def test_run_serialized_uses_lock(adapter):
     """CLIAdapter.run_serialized acquires the write lock."""
-    with patch(
+    with patch.object(adapter, "_probe_cli_version", AsyncMock(return_value={"compatible": True})), patch(
         "backend.adapter.cli_adapter.subprocess.run",
         return_value=_completed(0, b"ok", b""),
     ) as mock_run:
@@ -510,7 +682,7 @@ async def test_handshake_passes_health_timeout_to_run_json():
     async def fake_run_json(args, timeout=None):
         calls.append((args, timeout))
         if args == ["version"]:
-            return {"package_version": "1.2.1"}
+            return {"package_version": "1.4.5"}
         if args == ["health"]:
             return {"status": "healthy"}
         raise AssertionError(f"unexpected command: {args}")

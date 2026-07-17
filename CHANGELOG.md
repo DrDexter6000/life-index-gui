@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-17
+
+### What users get
+- Start from a first-use empty state, then use the established CLI-backed write, save, search, journal-detail, and Panel paths as your library grows.
+- AI+ is an optional host-agent integration in the production path. Its connection and health are shown honestly, while writing and keyword search remain usable when it is unavailable.
+- Existing draft recovery, import outcomes, and search activation/result states make it clearer what completed and what needs attention.
+
+### Included in this release
+- First-use activation and the established CLI-backed write, search, journal-detail, and Panel workflows.
+- Optional host-agent AI+ with visible availability and health states.
+- Existing draft recovery, import workflow outcomes, and search activation/result states.
+- Life Index GUI remains on its pre-1.0 version line.
+
 ## [0.4.0] - 2026-07-09
 
 ### What users get

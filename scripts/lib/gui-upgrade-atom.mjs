@@ -12,14 +12,14 @@ const BACKEND_PYTHON_MIN = { major: 3, minor: 11 };
 const BACKEND_PYTHON_MAX = { major: 3, minor: 13 };
 const REQUIRED_BACKEND_MODULES = ['fastapi', 'uvicorn', 'pydantic_core', 'PIL'];
 const BACKEND_REQUIREMENTS_RELATIVE = 'backend/requirements.txt';
-const CLI_MINIMUM_VERSION_FALLBACK = '1.3.7';
+const CLI_MINIMUM_VERSION_FALLBACK = '1.4.5';
 const CLI_VERSION_COMMAND = 'life-index --version';
 const VERIFY_STACK_COMMAND = 'npm run verify-stack';
 const SYNC_SKILL_COMMAND = 'npm run sync-skill';
 const CLI_FEATURE_GATES = [
   {
     id: 'entity_review_cards',
-    required_cli: '1.4.4',
+    required_cli: '1.4.5',
     hard_required: true,
     label: 'Entity review cards',
   },
@@ -186,15 +186,9 @@ function isSupportedBackendPython(version) {
 }
 
 function parseVersionParts(value) {
-  const parts = String(value ?? '')
-    .trim()
-    .split('.')
-    .map((part) => {
-      const match = part.match(/^(\d+)/);
-      return match ? Number.parseInt(match[1], 10) : null;
-    });
-  if (parts.length === 0 || parts.some((part) => part == null || Number.isNaN(part))) return null;
-  return parts;
+  const normalized = String(value ?? '').trim();
+  if (!/^\d+\.\d+\.\d+$/.test(normalized)) return null;
+  return normalized.split('.').map((part) => Number.parseInt(part, 10));
 }
 
 function compareDottedVersion(actual, minimum) {
@@ -237,8 +231,8 @@ function extractCliPackageVersion(stdout) {
       ?? payload.bootstrap_manifest?.repo_version
       ?? null;
   } catch {
-    const match = text.match(/(?:package_version|cli_package_version|life-index)\D+(\d+\.\d+(?:\.\d+)?)/i)
-      ?? text.match(/^(\d+\.\d+(?:\.\d+)?)/);
+    const match = text.match(/(?:package_version|cli_package_version|life-index)\D+([^\s"'`,}]+)/i)
+      ?? text.match(/^\s*(\S+)/);
     return match?.[1] ?? null;
   }
 }

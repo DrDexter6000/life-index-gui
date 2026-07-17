@@ -19,11 +19,22 @@ import subprocess
 import sys
 from typing import Any
 
+# The example is invoked by path from the repository root rather than as an
+# installed package.  Make the GUI-owned canonical contracts importable while
+# keeping this adapter provider-neutral.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
 
-QUERY_SCHEMA = "gui.host_agent.query_response.v1"
-METADATA_SCHEMA = "gui.host_agent.metadata_proposal.v1"
+from host_agent_bridge.contracts import (
+    METADATA_SCHEMA,
+    QUERY_SCHEMA,
+    parse_exact_json_object,
+    validate_metadata_proposal,
+    validate_query_response,
+)
+
 DEFAULT_TIMEOUT_SECONDS = 600.0
-DIAGNOSTIC_TAIL_CHARS = 1200
 
 
 class AdapterError(Exception):
@@ -60,14 +71,26 @@ def _extract_request(prompt: str) -> dict[str, Any]:
 def _adapter_argv() -> list[str]:
     raw_json = os.environ.get("LIFE_INDEX_HOST_AGENT_ADAPTER_ARGV_JSON", "").strip()
     if raw_json:
-        parsed = json.loads(raw_json)
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            raise AdapterError(
+                "host-agent-adapter-command-config-invalid",
+                {"error_type": type(exc).__name__},
+            ) from exc
         if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
             raise AdapterError("host-agent-adapter-command-config-invalid")
         return parsed
 
     raw_command = os.environ.get("LIFE_INDEX_HOST_AGENT_ADAPTER_COMMAND", "").strip()
     if raw_command:
-        return shlex.split(raw_command, posix=os.name != "nt")
+        try:
+            return shlex.split(raw_command, posix=os.name != "nt")
+        except ValueError as exc:
+            raise AdapterError(
+                "host-agent-adapter-command-config-invalid",
+                {"error_type": type(exc).__name__},
+            ) from exc
 
     raise AdapterError("host-agent-adapter-command-unconfigured")
 
@@ -116,41 +139,32 @@ def _run_external_agent(request_payload: dict[str, Any]) -> dict[str, Any]:
         raise AdapterError(
             "host-agent-adapter-command-timeout",
             {
-                "stdout_tail": _tail(exc.stdout or ""),
-                "stderr_tail": _tail(exc.stderr or ""),
+                **_output_metadata(exc.stdout, exc.stderr),
                 "timed_out": True,
             },
         ) from exc
     except OSError as exc:
-        raise AdapterError("host-agent-adapter-command-failed", {"error": str(exc)}) from exc
+        raise AdapterError(
+            "host-agent-adapter-command-failed",
+            {"error_type": type(exc).__name__},
+        ) from exc
 
     if completed.returncode != 0:
         raise AdapterError(
             "host-agent-adapter-command-failed",
             {
+                **_output_metadata(completed.stdout, completed.stderr),
                 "returncode": completed.returncode,
-                "stdout_tail": _tail(completed.stdout),
-                "stderr_tail": _tail(completed.stderr),
             },
         )
 
-    return _extract_json_object(completed.stdout)
-
-
-def _extract_json_object(text: str) -> dict[str, Any]:
-    decoder = json.JSONDecoder()
-    start = text.find("{")
-    while start >= 0:
-        chunk = text[start:].lstrip()
-        try:
-            value, _end = decoder.raw_decode(chunk)
-        except json.JSONDecodeError:
-            start = text.find("{", start + 1)
-            continue
-        if isinstance(value, dict):
-            return value
-        start = text.find("{", start + 1)
-    raise AdapterError("host-agent-adapter-output-not-json", {"stdout_tail": _tail(text)})
+    try:
+        return parse_exact_json_object(completed.stdout)
+    except ValueError as exc:
+        raise AdapterError(
+            "host-agent-envelope-invalid",
+            _output_metadata(completed.stdout, ""),
+        ) from exc
 
 
 def _is_metadata_request(request_payload: dict[str, Any], prompt: str) -> bool:
@@ -158,50 +172,20 @@ def _is_metadata_request(request_payload: dict[str, Any], prompt: str) -> bool:
 
 
 def _validate_query_payload(payload: dict[str, Any], request_payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("schema_version") != QUERY_SCHEMA:
-        raise AdapterError("host-agent-adapter-query-schema-mismatch")
-    mode = payload.get("mode")
-    if mode not in {"GROUNDED", "UNGROUNDED", "PARTIAL", "UNAVAILABLE"}:
-        raise AdapterError("host-agent-adapter-query-mode-invalid")
-    answer = payload.get("answer")
-    if not isinstance(answer, dict) or answer.get("mode") != mode:
-        raise AdapterError("host-agent-adapter-answer-mode-mismatch")
-    evidence = payload.get("evidence")
-    if not isinstance(evidence, list):
-        raise AdapterError("host-agent-adapter-evidence-invalid")
-    if mode == "GROUNDED" and not evidence:
-        raise AdapterError("host-agent-adapter-grounded-missing-evidence")
-    if mode == "UNGROUNDED" and evidence:
-        raise AdapterError("host-agent-adapter-ungrounded-has-evidence")
-    for item in evidence:
-        if not isinstance(item, dict):
-            raise AdapterError("host-agent-adapter-evidence-invalid")
-        for key in ("id", "rel_path", "title", "date"):
-            if not isinstance(item.get(key), str) or not item[key]:
-                raise AdapterError("host-agent-adapter-evidence-invalid")
-    payload.setdefault("request_id", request_payload.get("request_id"))
-    payload.setdefault("conversation_id", request_payload.get("conversation_id"))
-    payload.setdefault("source", "host-agent")
-    payload.setdefault("query", request_payload.get("query") or "")
+    del request_payload
+    try:
+        validate_query_response(payload)
+    except ValueError as exc:
+        raise AdapterError("host-agent-envelope-invalid") from exc
     return payload
 
 
 def _validate_metadata_payload(payload: dict[str, Any], request_payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("schema_version") != METADATA_SCHEMA:
-        raise AdapterError("host-agent-adapter-metadata-schema-mismatch")
-    mode = payload.get("mode")
-    if mode not in {"PROPOSED", "UNAVAILABLE"}:
-        raise AdapterError("host-agent-adapter-metadata-mode-invalid")
-    fields = payload.get("fields")
-    if not isinstance(fields, dict):
-        raise AdapterError("host-agent-adapter-metadata-fields-invalid")
-    if mode == "PROPOSED" and not fields:
-        raise AdapterError("host-agent-adapter-metadata-fields-empty")
-    if mode == "UNAVAILABLE" and fields:
-        raise AdapterError("host-agent-adapter-unavailable-metadata-has-fields")
-    payload.setdefault("request_id", request_payload.get("request_id"))
-    payload.setdefault("warnings", [])
-    payload.setdefault("policy", {"preserve_user_fields": True})
+    del request_payload
+    try:
+        validate_metadata_proposal(payload)
+    except ValueError as exc:
+        raise AdapterError("host-agent-envelope-invalid") from exc
     return payload
 
 
@@ -250,8 +234,13 @@ def _unavailable_metadata_response(
     return payload
 
 
-def _tail(text: str) -> str:
-    return text[-DIAGNOSTIC_TAIL_CHARS:]
+def _output_metadata(stdout: Any, stderr: Any) -> dict[str, Any]:
+    return {
+        "stdout_present": bool(stdout),
+        "stdout_length": len(stdout or ""),
+        "stderr_present": bool(stderr),
+        "stderr_length": len(stderr or ""),
+    }
 
 
 def main() -> int:
@@ -270,6 +259,13 @@ def main() -> int:
             payload = _unavailable_metadata_response(request_payload, exc.reason, exc.diagnostics)
         else:
             payload = _unavailable_query_response(request_payload, exc.reason, exc.diagnostics)
+    except Exception as exc:  # pragma: no cover - defensive adapter boundary
+        diagnostics = {"error_type": type(exc).__name__}
+        reason = "host-agent-adapter-failed"
+        if is_metadata:
+            payload = _unavailable_metadata_response(request_payload, reason, diagnostics)
+        else:
+            payload = _unavailable_query_response(request_payload, reason, diagnostics)
 
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     return 0

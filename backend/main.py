@@ -1,21 +1,15 @@
 """Life Index GUI Backend -- FastAPI application entry point."""
 
-import base64
-import binascii
-import inspect
-from io import BytesIO
 import json
 import logging
 import os
+import re
 from secrets import compare_digest
 import tempfile
-from urllib.parse import quote
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from PIL import Image, UnidentifiedImageError
-
 from backend.adapter.cli_adapter import CLIAdapter, CLIError
 from backend import config
 from backend.models.response import APIResponse
@@ -36,6 +30,8 @@ from backend.routers import (
     imports,
     index_diag,
     index_tree,
+    aggregate,
+    dashboard,
     journals,
     maintenance,
     public_link,
@@ -194,6 +190,8 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 app.include_router(health.router, prefix="/api")
 app.include_router(imports.router, prefix="/api")
 app.include_router(index_diag.router, prefix="/api")
+app.include_router(aggregate.router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(journals.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
@@ -212,7 +210,7 @@ async def download_attachment(
     variant: str | None = None,
     max_px: int | None = Query(None, ge=32, le=4096),
 ) -> Response:
-    """Serve attachment bytes through the CLI attachment export contract."""
+    """Serve attachment bytes through the CLI attachment media contract."""
     if variant not in (None, "", "thumbnail", "preview", "original"):
         api_payload = APIResponse.error_response(
             "ATTACHMENT_VARIANT_INVALID",
@@ -232,55 +230,7 @@ async def download_attachment(
         )
     except CLIError as exc:
         return _attachment_cli_error_response(exc)
-    if media_response is not None:
-        return media_response
-
-    try:
-        payload = await adapter.run_json(["attachment", "--export", file_path])
-    except CLIError as exc:
-        return _attachment_cli_error_response(exc)
-
-    if not isinstance(payload, dict) or payload.get("success") is not True:
-        return _attachment_contract_error_response(payload)
-
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        return _attachment_invalid_payload_response("Attachment CLI data must be an object.")
-
-    encoded_content = data.get("content_base64")
-    if not isinstance(encoded_content, str):
-        return _attachment_invalid_payload_response(
-            "Attachment CLI payload is missing content_base64."
-        )
-
-    try:
-        content = base64.b64decode(encoded_content, validate=True)
-    except (binascii.Error, ValueError):
-        return _attachment_invalid_payload_response(
-            "Attachment CLI payload contains invalid base64 content."
-        )
-
-    filename = _safe_attachment_filename(data.get("filename"))
-    rel_path = str(data.get("rel_path") or "")
-    content_type = str(data.get("content_type") or "application/octet-stream")
-    headers = {"Content-Disposition": _attachment_content_disposition(filename)}
-    if rel_path:
-        headers["X-Life-Index-Rel-Path"] = _attachment_header_percent_encode(rel_path)
-        headers["X-Life-Index-Rel-Path-Encoding"] = "percent-encoded"
-
-    if variant in ("thumbnail", "preview") and content_type.lower().startswith("image/"):
-        effective_max_px = max_px or (1400 if variant == "preview" else 160)
-        image_variant = _make_attachment_image_variant(content, content_type, effective_max_px)
-        if image_variant is not None:
-            content, content_type = image_variant
-            headers["X-Life-Index-Attachment-Variant"] = variant
-            if variant == "preview":
-                headers["X-Life-Index-Preview-Max-Px"] = str(effective_max_px)
-            else:
-                headers["X-Life-Index-Thumbnail-Max-Px"] = str(effective_max_px)
-            headers["Cache-Control"] = "public, max-age=86400"
-
-    return Response(content=content, media_type=content_type, headers=headers)
+    return media_response
 
 
 async def _try_cli_attachment_media_contract(
@@ -289,15 +239,13 @@ async def _try_cli_attachment_media_contract(
     variant: str,
     max_px: int | None,
     range_header: str | None,
-) -> Response | None:
-    run_bytes = getattr(adapter, "run_bytes", None)
-    if not inspect.iscoroutinefunction(run_bytes):
-        return None
+) -> Response:
 
     metadata_fd, metadata_path = tempfile.mkstemp(
         prefix="life-index-attachment-media-",
         suffix=".json",
     )
+    os.close(metadata_fd)
     args = [
         "attachment",
         "media",
@@ -316,40 +264,37 @@ async def _try_cli_attachment_media_contract(
         args.extend(["--range", range_header])
 
     try:
-        try:
-            content = await run_bytes(args)
-        except CLIError as exc:
-            if _attachment_media_contract_unavailable(exc):
-                return None
-            raise
+        content = await adapter.run_bytes(args)
 
-        metadata = _read_attachment_media_metadata(metadata_fd)
-        if not isinstance(metadata, dict):
+        metadata = _read_attachment_media_metadata(metadata_path)
+        error_payload = _attachment_media_error_payload(metadata)
+        if error_payload is not None:
+            return _attachment_contract_error_response(error_payload)
+        if _attachment_media_success_payload(metadata, content) is None:
             return _attachment_invalid_payload_response(
-                "Attachment media CLI did not write valid metadata."
+                "Attachment media CLI did not write a valid m17.attachment-media.v1 success envelope."
             )
-        if metadata.get("success") is False:
-            return _attachment_contract_error_response(metadata)
 
         return _attachment_media_response(content, metadata, variant)
     finally:
-        try:
-            os.close(metadata_fd)
-        except OSError:
-            pass
         try:
             os.unlink(metadata_path)
         except FileNotFoundError:
             pass
 
 
-def _read_attachment_media_metadata(metadata_fd: int) -> dict | None:
+def _read_attachment_media_metadata(metadata_path: str) -> dict | None:
+    metadata_fd = -1
     try:
-        os.lseek(metadata_fd, 0, os.SEEK_SET)
+        metadata_fd = os.open(metadata_path, os.O_RDONLY)
         raw_metadata = os.read(metadata_fd, 1024 * 1024)
-        return json.loads(raw_metadata.decode("utf-8"))
+        payload = json.loads(raw_metadata.decode("utf-8"))
+        return payload if isinstance(payload, dict) else None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
+    finally:
+        if metadata_fd >= 0:
+            os.close(metadata_fd)
 
 
 def _attachment_media_response(
@@ -430,60 +375,165 @@ def _attachment_media_status_code(metadata: dict) -> int:
     return 200
 
 
-def _attachment_media_contract_unavailable(exc: CLIError) -> bool:
-    output = f"{exc.stderr}\n{exc.stdout}".lower()
-    return any(
-        marker in output
-        for marker in (
-            "unknown command",
-            "no such command",
-            "invalid choice",
-            "no such option",
-            "unrecognized arguments",
-            "unrecognized option",
-            "unknown option",
-        )
+def _attachment_cli_error_response(exc: CLIError) -> JSONResponse:
+    for channel in (exc.stderr, exc.stdout):
+        payload = _parse_attachment_media_error(channel)
+        if payload is not None:
+            return _attachment_contract_error_response(payload)
+        payload = _parse_gui_error(channel)
+        if payload is not None:
+            return _attachment_contract_error_response(payload)
+
+    api_payload = APIResponse.error_response(
+        "ATTACHMENT_MEDIA_CLI_ERROR",
+        "Attachment media CLI failed without a valid structured error envelope.",
     )
+    return JSONResponse(status_code=502, content=api_payload.model_dump())
 
 
-def _make_attachment_image_variant(
-    content: bytes,
-    content_type: str,
-    max_px: int,
-) -> tuple[bytes, str] | None:
+def _parse_attachment_media_error(channel: str) -> dict | None:
     try:
-        with Image.open(BytesIO(content)) as image:
-            image.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
-            output = BytesIO()
-            image_format = (image.format or "").upper()
-            if image_format in {"JPEG", "JPG"} or content_type.lower() == "image/jpeg":
-                if image.mode not in ("RGB", "L"):
-                    image = image.convert("RGB")
-                image.save(output, format="JPEG", quality=82, optimize=True, progressive=True)
-                return output.getvalue(), "image/jpeg"
-            if image_format == "WEBP" or content_type.lower() == "image/webp":
-                image.save(output, format="WEBP", quality=80, method=4)
-                return output.getvalue(), "image/webp"
+        payload = json.loads(channel) if channel else None
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return _attachment_media_error_payload(payload)
 
-            image.save(output, format="PNG", optimize=True)
-            return output.getvalue(), "image/png"
-    except (OSError, UnidentifiedImageError, ValueError):
-        logger.warning("Unable to generate attachment image variant from CLI-exported bytes.")
+
+def _parse_gui_error(channel: str) -> dict | None:
+    try:
+        payload = json.loads(channel) if channel else None
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("ok") is not False:
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    if not isinstance(error.get("code"), str) or not error["code"].strip():
+        return None
+    if not isinstance(error.get("message"), str) or not error["message"].strip():
+        return None
+    return payload
+
+
+def _attachment_media_error_payload(payload: object) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema_version") != "m17.attachment-media.v1":
+        return None
+    if payload.get("success") is not False or payload.get("data") is not None:
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    if not isinstance(error.get("code"), str) or not error["code"].strip():
+        return None
+    if not isinstance(error.get("message"), str) or not error["message"].strip():
+        return None
+    return payload
+
+
+def _attachment_media_success_payload(payload: object, content: bytes) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema_version") != "m17.attachment-media.v1":
+        return None
+    if payload.get("success") is not True or "error" not in payload or payload.get("error") is not None:
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    headers = data.get("headers")
+    if not isinstance(headers, dict):
+        return None
+    stream = data.get("stream")
+    if not isinstance(stream, dict):
+        return None
+    status_code = stream.get("status_code")
+    if (
+        isinstance(status_code, bool)
+        or not isinstance(status_code, int)
+        or status_code not in (200, 206)
+    ):
+        return None
+    content_type = data.get("content_type")
+    if (
+        not isinstance(content_type, str)
+        or not content_type.strip()
+        or "\r" in content_type
+        or "\n" in content_type
+    ):
+        return None
+    size = data.get("size")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0 or size != len(content):
+        return None
+    for key, value in headers.items():
+        if "\r" in str(key) or "\n" in str(key):
+            return None
+        if isinstance(value, str) and ("\r" in value or "\n" in value):
+            return None
+
+    content_length_values = _attachment_media_header_values(headers, "content-length")
+    if len(content_length_values) != 1:
+        return None
+    content_length = content_length_values[0]
+    if not isinstance(content_length, str) or not re.fullmatch(
+        r"[0-9]+", content_length
+    ):
+        return None
+    try:
+        content_length_value = int(content_length)
+    except ValueError:
+        return None
+    if content_length_value != len(content):
         return None
 
+    content_range_values = _attachment_media_header_values(headers, "content-range")
+    if status_code == 200:
+        if content_range_values:
+            return None
+    else:
+        accept_ranges_values = _attachment_media_header_values(headers, "accept-ranges")
+        if len(accept_ranges_values) != 1:
+            return None
+        accept_ranges = accept_ranges_values[0]
+        if (
+            not isinstance(accept_ranges, str)
+            or accept_ranges.strip().lower() != "bytes"
+        ):
+            return None
+        if len(content_range_values) != 1:
+            return None
+        content_range = content_range_values[0]
+        if not isinstance(content_range, str):
+            return None
+        range_match = re.fullmatch(
+            r"bytes ([0-9]+)-([0-9]+)/([0-9]+)", content_range
+        )
+        if range_match is None:
+            return None
+        try:
+            range_start, range_end, range_total = (
+                int(part) for part in range_match.groups()
+            )
+        except ValueError:
+            return None
+        if range_start > range_end or range_end >= range_total:
+            return None
+        if range_end - range_start + 1 != len(content):
+            return None
+    return payload
 
-def _attachment_cli_error_response(exc: CLIError) -> JSONResponse:
-    try:
-        payload = json.loads(exc.stdout)
-    except json.JSONDecodeError:
-        payload = {
-            "success": False,
-            "error": {
-                "code": "CLI_ERROR",
-                "message": exc.stderr or exc.stdout or "Attachment CLI failed.",
-            },
-        }
-    return _attachment_contract_error_response(payload)
+
+def _attachment_media_header_values(headers: dict, name: str) -> list[object]:
+    """Return case-insensitive values for one sidecar response header."""
+    return [
+        value
+        for key, value in headers.items()
+        if isinstance(key, str) and key.lower() == name
+    ]
 
 
 def _attachment_contract_error_response(payload: object) -> JSONResponse:
@@ -509,26 +559,6 @@ def _attachment_http_status(code: str) -> int:
         "ATTACHMENT_NOT_FILE": 400,
         "ATTACHMENT_NOT_FOUND": 404,
     }.get(code, 502)
-
-
-def _safe_attachment_filename(value: object) -> str:
-    filename = str(value or "attachment")
-    filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
-    filename = filename.replace('"', "").replace("\r", "").replace("\n", "")
-    return filename or "attachment"
-
-
-def _attachment_content_disposition(filename: str) -> str:
-    ascii_filename = filename.encode("ascii", "ignore").decode("ascii").strip()
-    ascii_filename = ascii_filename.replace("\\", "_").replace("/", "_").replace('"', "")
-    if not ascii_filename:
-        ascii_filename = "attachment"
-    encoded_filename = quote(filename, safe="")
-    return f"inline; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}"
-
-
-def _attachment_header_percent_encode(value: str) -> str:
-    return quote(value, safe="/._-")
 
 
 @app.get("/api")

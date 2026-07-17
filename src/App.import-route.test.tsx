@@ -1,9 +1,7 @@
-import { type ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router';
-import App from './App';
+import { createMemoryRouter } from 'react-router';
+import App, { appRoutes } from './App';
 
 // Mock the lazy-loaded ImportWorkflow so we can verify route registration
 // without needing the real component to exist during RED phase.
@@ -20,6 +18,10 @@ vi.mock('@/app/routes/ImportWorkflow', () => ({
 vi.mock('@/app/routes/Recall', () => ({
   __esModule: true,
   default: () => <div>Recall</div>,
+}));
+vi.mock('@/app/routes/TheCore', () => ({
+  __esModule: true,
+  default: () => <div>TheCore</div>,
 }));
 vi.mock('@/app/routes/Archives', () => ({
   __esModule: true,
@@ -49,27 +51,15 @@ vi.mock('@/app/routes/IndexDiagnostics', () => ({
   __esModule: true,
   default: () => <div>IndexDiagnostics</div>,
 }));
-
-// Replace BrowserRouter in App with a passthrough so MemoryRouter is the
-// only real router — avoids the "nested Router" error.
-vi.mock('react-router', async () => {
-  const actual = await vi.importActual('react-router');
-  return {
-    ...actual,
-    BrowserRouter: ({ children }: { children: ReactNode }) => <>{children}</>,
-  };
-});
+vi.mock('@/app/routes/PublicLinkExchange', () => ({
+  __esModule: true,
+  default: () => <div>PublicLinkExchange</div>,
+}));
 
 function renderAppAtImport() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const router = createMemoryRouter(appRoutes, { initialEntries: ['/import'] });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/import']}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
+    <App router={router} />,
   );
 }
 

@@ -316,6 +316,31 @@ async def get_journal(journal_id: str) -> APIResponse[JournalDetail]:
 # ── Write helpers ─────────────────────────────────────────────────────────
 
 
+def _safe_attachment_staging_filename(value: object) -> str:
+    """Return one safe basename for request-local attachment staging."""
+    filename = str(value or "").replace("\\", "/").rsplit("/", 1)[-1]
+    stem = filename.split(".", 1)[0].upper()
+    windows_reserved = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{number}" for number in range(1, 10)),
+        *(f"LPT{number}" for number in range(1, 10)),
+    }
+    if (
+        not filename
+        or not filename.strip()
+        or filename in {".", ".."}
+        or "\x00" in filename
+        or any(ord(character) < 32 or character in '<>:"/\\|?*' for character in filename)
+        or filename.rstrip(". ") != filename
+        or stem in windows_reserved
+    ):
+        return "attachment"
+    return filename
+
+
 async def _prepare_attachments(files: list[UploadFile], temp_dir: str) -> list[dict]:
     """Stage uploaded files in an OS temp directory and return attachment descriptors.
 
@@ -326,12 +351,14 @@ async def _prepare_attachments(files: list[UploadFile], temp_dir: str) -> list[d
     attachments: list[dict] = []
     for file in files:
         contents = await file.read()
-        suffix = Path(file.filename or "attachment").suffix
-        with tempfile.NamedTemporaryFile(dir=temp_dir, delete=False, suffix=suffix) as tmp:
-            tmp.write(contents)
-            attachments.append(
-                {"source_path": str(Path(tmp.name).resolve()), "description": ""}
-            )
+        filename = _safe_attachment_staging_filename(file.filename)
+        staging_dir = Path(tempfile.mkdtemp(dir=temp_dir))
+        staged_path = staging_dir / filename
+        with staged_path.open("xb") as staged_file:
+            staged_file.write(contents)
+        attachments.append(
+            {"source_path": str(staged_path.resolve()), "description": ""}
+        )
     return attachments
 
 

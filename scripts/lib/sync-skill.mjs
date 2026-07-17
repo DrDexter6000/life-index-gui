@@ -27,6 +27,14 @@ function makeFailure(reason, message, extra = {}) {
   };
 }
 
+function commandPath(path) {
+  return /\s/.test(path) ? `"${path}"` : path;
+}
+
+function disambiguationHint(candidate) {
+  return `Run npm run sync-skill -- --host-skill-dir ${commandPath(candidate)} to choose this host skill registry.`;
+}
+
 function hostHome(env) {
   return resolve(
     env.LIFE_INDEX_GUI_SKILL_HOME
@@ -43,6 +51,16 @@ function hostSkillRoots(homeDir) {
   ];
 }
 
+function resolveExplicitHostSkillDir(hostSkillDir, env) {
+  if (!hostSkillDir) return null;
+  const homeDir = hostHome(env);
+  if (hostSkillDir === '~') return homeDir;
+  if (hostSkillDir.startsWith('~/') || hostSkillDir.startsWith('~\\')) {
+    return resolve(homeDir, hostSkillDir.slice(2));
+  }
+  return resolve(hostSkillDir);
+}
+
 function findExistingTargets(root) {
   const targets = [];
   const direct = join(root, GUI_SKILL_NAME);
@@ -57,15 +75,31 @@ function findExistingTargets(root) {
   return targets;
 }
 
-function resolveSkillTarget(homeDir) {
+function resolveSkillTarget(homeDir, { hostSkillDir } = {}) {
+  if (hostSkillDir) {
+    const explicitRoot = resolveExplicitHostSkillDir(hostSkillDir, { LIFE_INDEX_GUI_SKILL_HOME: homeDir });
+    if (!isDirectory(explicitRoot)) {
+      return makeFailure(
+        'host_skill_directory_invalid',
+        'Host skill directory does not exist or is not a directory; refusing to create the registry root.',
+        { host_skill_dir: explicitRoot },
+      );
+    }
+    return { delivered: true, targetDir: join(explicitRoot, GUI_SKILL_NAME) };
+  }
+
   const roots = hostSkillRoots(homeDir).filter(isDirectory);
   const existingTargets = roots.flatMap(findExistingTargets);
 
   if (existingTargets.length > 1) {
+    const targetRoots = existingTargets.map((target) => dirname(target));
     return makeFailure(
       'ambiguous_existing_skill_targets',
       `Multiple ${GUI_SKILL_NAME} skill targets were found; refusing to choose one.`,
-      { candidates: existingTargets },
+      {
+        candidates: existingTargets,
+        hint: disambiguationHint(targetRoots[0]),
+      },
     );
   }
 
@@ -85,7 +119,10 @@ function resolveSkillTarget(homeDir) {
     return makeFailure(
       'ambiguous_host_skill_directories',
       'Multiple host skill directories were found; refusing to choose one.',
-      { candidates: roots },
+      {
+        candidates: roots,
+        hint: disambiguationHint(roots[0]),
+      },
     );
   }
 
@@ -124,10 +161,10 @@ function renderSkill({ template, repoRoot, triggersBlock }) {
     .replace('{{PRESERVED_TRIGGERS}}', triggerText);
 }
 
-export function syncGuiSkill({ repoRoot = defaultRepoRoot, env = process.env } = {}) {
+export function syncGuiSkill({ repoRoot = defaultRepoRoot, env = process.env, hostSkillDir = null } = {}) {
   const resolvedRepoRoot = resolve(repoRoot);
   const homeDir = hostHome(env);
-  const target = resolveSkillTarget(homeDir);
+  const target = resolveSkillTarget(homeDir, { hostSkillDir });
   if (!target.delivered) return target;
 
   const templatePath = join(resolvedRepoRoot, 'skill', 'SKILL.md');

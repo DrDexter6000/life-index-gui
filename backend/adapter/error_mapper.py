@@ -26,6 +26,28 @@ IMPORT_ERROR_MESSAGES = {
 }
 
 
+def _parse_negative_error(channel: str) -> tuple[str, str] | None:
+    """Extract code/message only from an explicit negative CLI envelope."""
+    try:
+        payload = json.loads(channel) if channel else None
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or not (
+        payload.get("ok") is False or payload.get("success") is False
+    ):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    message = error.get("message")
+    if not isinstance(code, str) or not code.strip():
+        return None
+    if not isinstance(message, str) or not message.strip():
+        return None
+    return code, message
+
+
 def map_import_error(exc: CLIError) -> tuple[str, str]:
     """Map a CLI import error to (error_code, Chinese_user_message).
 
@@ -33,9 +55,19 @@ def map_import_error(exc: CLIError) -> tuple[str, str]:
     ``error.code`` and maps it to a GUI error constant and user message.
     Unrecognized codes fall back to ``IMPORT_INTERNAL_ERROR``.
     """
+    for channel in (exc.stderr, exc.stdout):
+        structured_error = _parse_negative_error(channel)
+        if structured_error is None:
+            continue
+        code, message = structured_error
+        if code in {"CLI_VERSION_UNSUPPORTED", "CLI_VERSION_INVALID"}:
+            return code, message
+        if code in IMPORT_ERROR_MESSAGES:
+            return (code, IMPORT_ERROR_MESSAGES[code])
+
     try:
         payload = json.loads(exc.stdout) if exc.stdout else {}
-    except json.JSONDecodeError:
+    except (TypeError, json.JSONDecodeError):
         return (E.IMPORT_INTERNAL_ERROR, IMPORT_ERROR_MESSAGES[E.IMPORT_INTERNAL_ERROR])
 
     error_block = payload.get("error") if isinstance(payload, dict) else None
@@ -53,6 +85,10 @@ def map_cli_error(stderr: str, returncode: int = 1) -> tuple[str, str]:
 
     Returns a tuple of (machine-readable code, user-friendly Chinese message).
     """
+    structured_error = _parse_negative_error(stderr)
+    if structured_error is not None:
+        return structured_error
+
     lower = stderr.lower()
 
     # Permission issues

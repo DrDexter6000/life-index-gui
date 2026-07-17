@@ -9,6 +9,34 @@ GUI installation path: `{{GUI_INSTALL_PATH}}`
 
 Life Index GUI is the human-facing experience layer for the Life Index CLI. Use these deterministic steps to start or reuse the local GUI without rediscovering the checkout.
 
+## Ownership Boundary
+
+The normative cross-layer roles and CURRENT/TARGET delivery status live in the GUI checkout's `docs/ARCHITECTURE.md` **Authority, Roles, And Delivery State** block.
+
+- CURRENT: the GUI is a first-class human entry and presentation/interaction shell; its backend uses direct CLI/Core contracts and never requires Gateway.
+- Natural-language understanding, planning, multi-hop tool orchestration, interpretation, and answer synthesis belong to the Host Agent using the installed Life Index Skill; the GUI does not own domain intelligence or semantics.
+- The GUI/backend never reads or writes L1 Life Index data directly.
+- D2 Package C3's strict Codex adapter correction is accepted in the current
+  contract. Every request uses a unique run directory as both subprocess cwd
+  and the exact `-C` root with `--skip-git-repo-check --ignore-user-config`, so
+  unrelated user-configured MCP/hooks/settings cannot enter the adapter request;
+  Codex authentication still uses `CODEX_HOME`. Health checks executable
+  discovery, exact supported version `0.144.1`, `codex login status`, and
+  caller/configured query and metadata procedure SHA-256 freshness; invocation
+  rechecks both digests. Codex `0.144.1` completed same-machine isolated real
+  model/network/generated-schema and grounded acceptance. A future Codex
+  version, authentication mode, or permission-contract change requires a new
+  compatibility review.
+- D3 deterministic GUI core is current: Archives uses deterministic contracts,
+  and its product DoD is accepted (`GO`); metadata proposals require explicit
+  consent and normal Save, AI+
+  preserves Host Agent terminality and safe evidence navigation, and journal
+  editing stays in detail context through the existing write authority.
+- Current shared-program state is D4 corrected `GO`; D5 newline-JSON-RPC is
+  `DEFERRED / NOT NECESSARY NOW`; D6-A is `ACCEPTED`; and D6-B is
+  `NOT_DISPATCHED`. These states do not authorize merge, release, or public
+  synchronization.
+
 ## Before Starting
 
 1. Check whether the GUI is already running.
@@ -88,6 +116,12 @@ Use the GUI upgrade atom before manual repair:
 cd "{{GUI_INSTALL_PATH}}"
 npm run gui-upgrade:plan
 npm run gui-upgrade:apply
+```
+
+If a manual skill refresh reports multiple host skill registries, choose one explicitly:
+
+```bash
+npm run sync-skill -- --host-skill-dir ~/.hermes/skills
 ```
 
 Full upgrade and operations guidance: `docs/AGENT_UPDATE_PLAYBOOK.md`.

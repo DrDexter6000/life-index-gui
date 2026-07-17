@@ -39,10 +39,12 @@ The current GUI upgrade atom emits `gui.upgrade.v0` JSON for planning and
 fail-closed apply checks. It covers git freshness/fast-forward, Node
 devDependencies, `NODE_ENV` / npm omit guards, and Python backend dependency
 preflight/install. It also checks the installed Life Index CLI dependency and
-feature gates, including review cards requiring CLI `1.4.4+`. After all safe
+feature gates, including the global CLI `1.4.5+` floor used by review cards. After all safe
 dependency and git actions are complete, apply runs `npm run verify-stack`, then
-`npm run sync-skill`, and reports both results in JSON. It still does not run
-public sync, tags, releases, or CLI upgrade writes.
+`npm run sync-skill`, and reports both results in JSON. The GUI requires CLI
+`1.4.5+`; an older, missing, or unparseable CLI version is a fail-closed
+dependency error. The atom still does not run public sync, tags, releases, or
+CLI upgrade writes.
 
 If the GUI atom reports `resolve_cli_dependency`, stop the GUI update and fix
 the CLI first through the CLI-owned upgrade flow, for example
@@ -99,9 +101,9 @@ The version authority is the backend JSON payload:
 - `repo_version`: CLI repository/version marker surfaced by `life-index version`
 - `compatible`: whether the detected CLI package version satisfies the GUI minimum
 
-GUI entity review cards are a feature-level gate on top of the baseline
-compatibility check. They require CLI `1.4.4+` because they consume the structured
-review action contract.
+GUI entity review cards use the global CLI `1.4.5+` compatibility floor because
+they consume the structured review action contract. They do not have a lower
+feature-level exception.
 
 `/api/version` is the concise compatibility surface for agents. `/api/health` carries the same version fields plus detailed CLI health diagnostics for the human-facing GUI.
 
@@ -138,6 +140,12 @@ The command writes `life-index-gui/SKILL.md` into exactly one detected host
 skill registry. If no registry is present, or multiple possible targets are
 present, it exits non-zero with `delivered:false` JSON instead of silently
 claiming success.
+
+On machines with multiple host skill registries, choose one explicitly:
+
+```bash
+npm run sync-skill -- --host-skill-dir ~/.hermes/skills
+```
 
 To clean project-owned leftovers explicitly:
 
@@ -182,5 +190,10 @@ The GUI is compatible when:
 1. `/api/version` returns `compatible: true`.
 2. `/api/health` returns an HTTP 200 JSON envelope.
 3. CLI health is not hiding an unresolved upgrade or unavailable runtime.
+
+The CLI version must be an exact numeric `MAJOR.MINOR.PATCH`; short versions
+and prerelease/build-suffixed versions fail closed. The backend adapter performs
+the compatibility preflight before every non-handshake CLI feature call and
+returns a structured upgrade error without invoking that feature command.
 
 AI+ and metadata suggestions still come from the configured host agent. When no host agent is connected, the GUI should report an offline/unavailable state rather than pretending to provide built-in intelligence.

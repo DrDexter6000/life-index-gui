@@ -19,12 +19,12 @@ const mockConfirmMutateAsync = vi.fn();
 const mockInvalidateQueries = vi.fn();
 
 vi.mock('@/hooks/useJournals', () => ({
-  useEntityStats: () => mockUseEntityStats(),
-  useEntityList: () => mockUseEntityList(),
-  useEntityCheck: () => mockUseEntityCheck(),
-  useEntityAudit: () => mockUseEntityAudit(),
-  useEntityReview: () => mockUseEntityReview(),
-  useEntityCandidateEdges: () => mockUseEntityCandidateEdges(),
+  useEntityStats: (enabled?: boolean) => mockUseEntityStats(enabled),
+  useEntityList: (type?: string, enabled?: boolean) => mockUseEntityList(type, enabled),
+  useEntityCheck: (enabled?: boolean) => mockUseEntityCheck(enabled),
+  useEntityAudit: (enabled?: boolean) => mockUseEntityAudit(enabled),
+  useEntityReview: (enabled?: boolean) => mockUseEntityReview(enabled),
+  useEntityCandidateEdges: (limit?: number, enabled?: boolean) => mockUseEntityCandidateEdges(limit, enabled),
   useEntityMutationPreview: () => mockUseEntityMutationPreview(),
   useEntityMutationConfirm: () => mockUseEntityMutationConfirm(),
   useVersionCheck: () => mockUseVersionCheck(),
@@ -97,8 +97,8 @@ const defaultReview = {
 
 const defaultVersion = {
   data: {
-    cli_package_version: '1.4.4',
-    cli_minimum_version: '1.3.7',
+    cli_package_version: '1.4.5',
+    cli_minimum_version: '1.4.5',
     compatible: true,
   },
   isLoading: false,
@@ -206,6 +206,29 @@ beforeEach(() => {
 });
 
 describe('EntityGraph', () => {
+  it('defers entity feature calls and mutations until CLI compatibility is confirmed', () => {
+    mockUseVersionCheck.mockReturnValue({
+      data: {
+        cli_package_version: '1.4.4',
+        cli_minimum_version: '1.4.5',
+        compatible: false,
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderEntityGraph();
+
+    expect(mockUseEntityStats).toHaveBeenCalledWith(false);
+    expect(mockUseEntityList).toHaveBeenCalledWith(undefined, false);
+    expect(mockUseEntityCheck).toHaveBeenCalledWith(false);
+    expect(mockUseEntityAudit).toHaveBeenCalledWith(false);
+    expect(mockUseEntityReview).toHaveBeenCalledWith(false);
+    expect(mockUseEntityCandidateEdges).toHaveBeenCalledWith(undefined, false);
+    expect(screen.getByTestId('entity-delete-preview')).toBeDisabled();
+    expect(screen.getByTestId('entity-merge-preview')).toBeDisabled();
+  });
+
   // 1. Stats display
   it('renders total_entities and total_relationships when data loads', () => {
     renderEntityGraph();
@@ -319,12 +342,12 @@ describe('EntityGraph', () => {
     expect(screen.getByRole('button', { name: /Not-sure/ })).toBeInTheDocument();
   });
 
-  it('gates review action controls when CLI is older than 1.4.4', () => {
+  it('gates review action controls when CLI is older than 1.4.5', () => {
     mockUseVersionCheck.mockReturnValue({
       data: {
         cli_package_version: '1.4.3',
-        cli_minimum_version: '1.3.7',
-        compatible: true,
+        cli_minimum_version: '1.4.5',
+        compatible: false,
       },
       isLoading: false,
       isError: false,
@@ -340,12 +363,12 @@ describe('EntityGraph', () => {
     expect(screen.getByTestId('entity-review-card-review-1')).toHaveTextContent(
       'Alias overlap and nearby journal evidence',
     );
-    expect(screen.getByTestId('entity-review-version-gate')).toHaveTextContent('1.4.4');
+    expect(screen.getByTestId('entity-review-version-gate')).toHaveTextContent('1.4.5');
     expect(screen.queryByRole('button', { name: /Same/ })).not.toBeInTheDocument();
     expect(screen.queryByTestId('entity-review-action-review-1-merge_as_alias')).not.toBeInTheDocument();
   });
 
-  it('keeps review action controls enabled when CLI is 1.4.4', () => {
+  it('keeps review action controls enabled when CLI is 1.4.5', () => {
     mockUseEntityReview.mockReturnValue({
       data: { queue: [duplicateReviewItem], total: 1 },
       isLoading: false,

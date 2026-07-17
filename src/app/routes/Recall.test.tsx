@@ -54,6 +54,7 @@ const mockHostStreamReturn = {
   error: null as Error | null,
   events: [] as Array<Record<string, unknown>>,
   start: vi.fn(),
+  cancel: vi.fn(),
   reset: vi.fn(),
 };
 
@@ -111,7 +112,8 @@ vi.mock('@/hooks/useTranslation', () => ({
         recallTitleCn: '穿梭至某个时空坐标...',
         recallTitleEn: 'Warp to a space-time coordinate',
         searchPlaceholder: 'Search keywords...',
-        smartSearchSubmit: 'Search',
+        searchSubmit: 'Search',
+        hostAgentQueryCancel: 'Cancel',
         noResults: 'No matching results found',
         noResultsHint: 'Try different keywords',
         loadFailed: 'Load Failed',
@@ -190,6 +192,7 @@ describe('Recall', () => {
     mockHostStreamReturn.error = null;
     mockHostStreamReturn.events = [];
     mockHostStreamReturn.start.mockReset();
+    mockHostStreamReturn.cancel.mockReset();
     mockHostStreamReturn.reset.mockReset();
   });
 
@@ -265,6 +268,22 @@ describe('Recall', () => {
     fireEvent.click(screen.getByTestId('agent-submit'));
 
     expect(mockHostStreamReturn.start).toHaveBeenCalledWith('今年 SkyVision Africa 有几篇？');
+  });
+
+  it('exposes an explicit cancel control while the Host Agent stream is active', () => {
+    mockHostHealthReturn.data = readyHealth;
+    mockHostStreamReturn.status = 'streaming';
+
+    render(
+      <MemoryRouter>
+        <Recall />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByTestId('tab-agent'));
+    fireEvent.click(screen.getByTestId('agent-cancel'));
+
+    expect(mockHostStreamReturn.cancel).toHaveBeenCalledTimes(1);
   });
 
   it('renders live reasoning text without the retired stage harness', () => {

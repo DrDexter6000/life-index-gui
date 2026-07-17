@@ -14,12 +14,17 @@ from urllib import request as urllib_request
 from urllib.error import HTTPError
 from urllib.parse import urljoin
 
+from host_agent_bridge.contracts import (
+    HEALTH_SCHEMA,
+    METADATA_FIELD_KEYS,
+    parse_exact_json_object,
+    parse_exact_json_value,
+    validate_health as validate_health_payload,
+    validate_metadata_proposal as validate_metadata_payload,
+    validate_query_response as validate_query_payload,
+)
 
 ExpectedMode = Literal["ready", "unavailable", "runtime-unavailable"]
-
-QUERY_SCHEMA = "gui.host_agent.query_response.v1"
-METADATA_SCHEMA = "gui.host_agent.metadata_proposal.v1"
-HEALTH_SCHEMA = "gui.host_agent.health.v1"
 
 
 class ConformanceError(AssertionError):
@@ -33,7 +38,7 @@ class HostAgentClient(Protocol):
     def post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         ...
 
-    def post_sse(self, path: str, payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    def post_sse(self, path: str, payload: dict[str, Any]) -> list[tuple[str, Any]]:
         ...
 
 
@@ -58,7 +63,7 @@ class UrlHostAgentClient:
     def post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request_json("POST", path, payload)
 
-    def post_sse(self, path: str, payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    def post_sse(self, path: str, payload: dict[str, Any]) -> list[tuple[str, Any]]:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib_request.Request(
             urljoin(self.base_url, path.lstrip("/")),
@@ -101,16 +106,16 @@ class UrlHostAgentClient:
             detail = exc.read().decode("utf-8", errors="replace")
             raise ConformanceError(f"{path} returned HTTP {exc.code}: {detail}") from exc
         try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError as exc:
+            parsed = parse_exact_json_object(body)
+        except ValueError as exc:
             raise ConformanceError(f"{path} did not return JSON") from exc
-        _require(isinstance(parsed, dict), f"{path} JSON body must be an object")
         return parsed
 
 
-def parse_sse(raw: str) -> list[tuple[str, dict[str, Any]]]:
-    frames: list[tuple[str, dict[str, Any]]] = []
-    for chunk in raw.strip().split("\n\n"):
+def parse_sse(raw: str) -> list[tuple[str, Any]]:
+    frames: list[tuple[str, Any]] = []
+    normalized = raw.replace("\r\n", "\n").replace("\r", "\n")
+    for chunk in normalized.strip().split("\n\n"):
         if not chunk.strip():
             continue
         event_type = "message"
@@ -122,10 +127,9 @@ def parse_sse(raw: str) -> list[tuple[str, dict[str, Any]]]:
                 data_text = line.removeprefix("data: ")
         if data_text:
             try:
-                data = json.loads(data_text)
-            except json.JSONDecodeError as exc:
+                data = parse_exact_json_value(data_text)
+            except ValueError as exc:
                 raise ConformanceError(f"SSE event {event_type} data is not JSON") from exc
-            _require(isinstance(data, dict), f"SSE event {event_type} data must be an object")
             frames.append((event_type, data))
     return frames
 
@@ -149,6 +153,7 @@ def run_conformance(
 
 def _check_health(client: HostAgentClient, expected_mode: ExpectedMode, result: ConformanceResult) -> None:
     payload = client.get_json("/health")
+    _validate_contract(validate_health_payload, payload, "health")
     _require(payload.get("schema_version") == HEALTH_SCHEMA, "health schema_version must be gui.host_agent.health.v1")
     _require(isinstance(payload.get("running"), bool), "health running must be boolean")
     _require(isinstance(payload.get("ready"), bool), "health ready must be boolean")
@@ -210,6 +215,10 @@ def _check_metadata(client: HostAgentClient, expected_mode: ExpectedMode, result
         },
     )
     validate_metadata_proposal(payload)
+    _require(
+        set(payload.get("fields", {})).issubset(set(METADATA_FIELD_KEYS)),
+        "metadata fields must use the canonical v1 key map",
+    )
 
     if expected_mode == "ready":
         _require(payload.get("mode") == "PROPOSED", "ready metadata scenario must return PROPOSED")
@@ -221,38 +230,18 @@ def _check_metadata(client: HostAgentClient, expected_mode: ExpectedMode, result
 
 
 def validate_query_response(payload: dict[str, Any]) -> None:
-    _require(payload.get("schema_version") == QUERY_SCHEMA, "query final schema_version mismatch")
-    _require(payload.get("source") == "host-agent", "query final source must be host-agent")
-    mode = payload.get("mode")
-    _require(mode in {"GROUNDED", "UNGROUNDED", "PARTIAL", "UNAVAILABLE"}, "query final mode is invalid")
-    answer = payload.get("answer")
-    _require(isinstance(answer, dict), "query final answer must be an object")
-    _require(answer.get("mode") == mode, "answer.mode must match top-level mode")
-    _require(isinstance(answer.get("summary"), str), "answer.summary must be a string")
-    evidence = payload.get("evidence")
-    _require(isinstance(evidence, list), "query final evidence must be an array")
-    if mode == "GROUNDED":
-        _require(len(evidence) > 0, "GROUNDED query final requires evidence")
-    if mode == "UNGROUNDED":
-        _require(len(evidence) == 0, "UNGROUNDED query final must not include evidence")
-    for item in evidence:
-        _require(isinstance(item, dict), "each evidence item must be an object")
-        for key in ("id", "rel_path", "title", "date"):
-            _require(isinstance(item.get(key), str) and item[key], f"evidence item requires {key}")
+    _validate_contract(validate_query_payload, payload, "query final")
 
 
 def validate_metadata_proposal(payload: dict[str, Any]) -> None:
-    _require(payload.get("schema_version") == METADATA_SCHEMA, "metadata schema_version mismatch")
-    mode = payload.get("mode")
-    _require(mode in {"PROPOSED", "UNAVAILABLE"}, "metadata mode is invalid")
-    _require(isinstance(payload.get("reason"), str) and payload["reason"], "metadata reason must be non-empty")
-    fields = payload.get("fields")
-    _require(isinstance(fields, dict), "metadata fields must be an object")
-    if mode == "PROPOSED":
-        _require(len(fields) > 0, "PROPOSED metadata must include at least one field")
-    else:
-        _require(fields == {}, "UNAVAILABLE metadata must not fabricate fields")
-    _require(isinstance(payload.get("warnings"), list), "metadata warnings must be an array")
+    _validate_contract(validate_metadata_payload, payload, "metadata proposal")
+
+
+def _validate_contract(validator: Any, payload: dict[str, Any], label: str) -> None:
+    try:
+        validator(payload)
+    except ValueError as exc:
+        raise ConformanceError(f"{label} envelope invalid") from exc
 
 
 def _require(condition: bool, message: str) -> None:

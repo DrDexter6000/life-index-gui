@@ -3,6 +3,7 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
 import {
+  DEFAULT_HOST_AGENT_STREAM_TIMEOUT_MS,
   hostAgentKeys,
   useHostAgentHealth,
   useHostAgentMetadataProposal,
@@ -240,5 +241,173 @@ describe('useHostAgentStream', () => {
       await startPromise;
     });
     await waitFor(() => expect(result.current.status).toBe('complete'));
+  });
+
+  it('accepts the first final as the only terminal event', async () => {
+    vi.spyOn(hostAgentAPI, 'stream').mockImplementation(async function* () {
+      yield { type: 'final', data: partialFinal };
+      yield {
+        type: 'error',
+        data: { code: 'LATE_ERROR', message: 'late error must be ignored' },
+      } as HostAgentStreamEvent;
+      yield { type: 'delta', data: { text: 'late delta must be ignored' } };
+    });
+
+    const { result } = renderHook(() => useHostAgentStream(), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.start('first final wins');
+    });
+
+    expect(result.current.status).toBe('complete');
+    expect(result.current.finalResponse?.reason).toBe(partialFinal.reason);
+    expect(result.current.events).toHaveLength(1);
+    expect(result.current.events[0]?.type).toBe('final');
+  });
+
+  it('treats an upstream error as terminal and never accepts a later final', async () => {
+    vi.spyOn(hostAgentAPI, 'stream').mockImplementation(async function* () {
+      yield {
+        type: 'error',
+        data: { code: 'RUNTIME_UNAVAILABLE', message: 'runtime unavailable' },
+      } as HostAgentStreamEvent;
+      yield { type: 'final', data: partialFinal };
+    });
+
+    const { result } = renderHook(() => useHostAgentStream(), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.start('error first');
+    });
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.finalResponse).toBeNull();
+    expect(result.current.error?.message).toContain('RUNTIME_UNAVAILABLE');
+    expect(result.current.events).toHaveLength(1);
+    expect(result.current.events[0]?.type).toBe('error');
+  });
+
+  it('does not report a clean disconnect without a final as success', async () => {
+    vi.spyOn(hostAgentAPI, 'stream').mockImplementation(async function* () {
+      yield { type: 'status', data: { phase: 'answering', message: 'partial' } };
+    });
+
+    const { result } = renderHook(() => useHostAgentStream(), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.start('disconnect before final');
+    });
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.finalResponse).toBeNull();
+    expect(result.current.error?.message).toContain('final response');
+  });
+
+  it('ignores late events from an aborted prior request', async () => {
+    let releaseOld!: () => void;
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const oldFinal = { ...partialFinal, request_id: 'old', reason: 'old answer' };
+    const newFinal = { ...partialFinal, request_id: 'new', reason: 'new answer' };
+    let call = 0;
+    vi.spyOn(hostAgentAPI, 'stream').mockImplementation(async function* () {
+      call += 1;
+      if (call === 1) {
+        await oldGate;
+        yield { type: 'final', data: oldFinal };
+        return;
+      }
+      yield { type: 'final', data: newFinal };
+    });
+
+    const { result } = renderHook(() => useHostAgentStream(), {
+      wrapper: createWrapper(),
+    });
+
+    let oldPromise!: Promise<void>;
+    act(() => {
+      oldPromise = result.current.start('old request');
+    });
+    await waitFor(() => expect(call).toBe(1));
+
+    await act(async () => {
+      await result.current.start('new request');
+    });
+    expect(result.current.finalResponse?.request_id).toBe('new');
+
+    await act(async () => {
+      releaseOld();
+      await oldPromise;
+    });
+
+    expect(result.current.finalResponse?.request_id).toBe('new');
+    expect(result.current.turns.at(-1)?.finalResponse?.request_id).toBe('new');
+  });
+
+  it('exposes explicit cancel that aborts the active request', async () => {
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(hostAgentAPI, 'stream').mockImplementation(async function* (_query, options) {
+      observedSignal = options?.signal;
+      await new Promise<void>((resolve) => options?.signal?.addEventListener('abort', () => resolve(), { once: true }));
+      yield* [] as HostAgentStreamEvent[];
+    });
+
+    const { result } = renderHook(() => useHostAgentStream(), {
+      wrapper: createWrapper(),
+    });
+
+    let startPromise!: Promise<void>;
+    act(() => {
+      startPromise = result.current.start('cancel me');
+    });
+    await waitFor(() => expect(observedSignal).toBeDefined());
+
+    act(() => {
+      result.current.cancel();
+    });
+    await act(async () => {
+      await startPromise;
+    });
+
+    expect(observedSignal?.aborted).toBe(true);
+    expect(result.current.status).toBe('cancelled');
+    expect(result.current.turns[0]?.status).toBe('cancelled');
+  });
+
+  it('ends an unfinished request honestly at the bounded timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(hostAgentAPI, 'stream').mockImplementation(async function* (_query, options) {
+        await new Promise<void>((resolve) => options?.signal?.addEventListener('abort', () => resolve(), { once: true }));
+        yield* [] as HostAgentStreamEvent[];
+      });
+
+      const { result } = renderHook(() => useHostAgentStream(), {
+        wrapper: createWrapper(),
+      });
+
+      let startPromise!: Promise<void>;
+      act(() => {
+        startPromise = result.current.start('timeout me');
+      });
+      await act(async () => {
+        await Promise.resolve();
+        vi.advanceTimersByTime(DEFAULT_HOST_AGENT_STREAM_TIMEOUT_MS);
+        await startPromise;
+      });
+
+      expect(result.current.status).toBe('error');
+      expect(result.current.finalResponse).toBeNull();
+      expect(result.current.error?.message).toContain('timed out');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
