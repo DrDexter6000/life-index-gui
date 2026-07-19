@@ -154,6 +154,7 @@
   "topicCreate": "Creation",
   "topicLife": "Daily",
   "titleLabel": "Title",
+  "titleCharacterLimit": "{{current}}/{{max}} · Maximum {{max}} characters",
   "recordPlaceholder": "What do you want to record today...",
   "moodInputPlaceholder": "Enter mood...",
   "locate": "Locate",

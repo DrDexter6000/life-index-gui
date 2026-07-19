@@ -49,6 +49,7 @@ type MetadataProposalReview = {
 
 let metadataProposalSequence = 0;
 const METADATA_PROPOSAL_CACHE_TTL_MS = 5 * 60 * 1000;
+const TITLE_MAX_LENGTH = 20;
 const metadataProposalCache = new Map<string, CachedMetadataProposal>();
 
 const PROPOSAL_FIELD_TARGETS: Record<string, ProposalTargetField> = {
@@ -987,10 +988,20 @@ export function MetadataSidebar({
             value={metadata.title || ''}
             onChange={(e) => onUpdate({ title: e.target.value })}
             placeholder={t('recordPlaceholder')}
-            maxLength={20}
+            maxLength={TITLE_MAX_LENGTH}
+            aria-describedby="metadata-title-limit"
             data-editor-title
             className="li-field-placeholder w-full px-4 py-2.5 bg-[var(--color-ether-surface-ghost)] border border-white/[0.06] rounded-xl text-[var(--color-primary)] text-sm focus:outline-none focus:border-[var(--color-gold)]/50 hover:border-[var(--color-gold)]/30 transition-colors placeholder:text-[var(--color-secondary)]"
           />
+          <p
+            id="metadata-title-limit"
+            className="mt-1.5 text-right text-[var(--text-caption)] text-[var(--color-muted)]"
+          >
+            {t('titleCharacterLimit', {
+              current: (metadata.title || '').length,
+              max: TITLE_MAX_LENGTH,
+            })}
+          </p>
         </div>
 
         {/* Abstract */}

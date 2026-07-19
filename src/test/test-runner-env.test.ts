@@ -9,10 +9,12 @@ import { buildVitestEnv } from '../../scripts/run-vitest.mjs';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 describe('Vitest runner environment', () => {
-  it('routes npm test through the environment-normalizing runner', () => {
+  it('runs the font contract before the environment-normalizing Vitest runner', () => {
     const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
 
-    expect(packageJson.scripts.test).toBe('node scripts/run-vitest.mjs');
+    expect(packageJson.scripts.test).toBe(
+      'node scripts/font-runtime.test.mjs && node scripts/run-vitest.mjs',
+    );
   });
 
   it('forces NODE_ENV=test even when the caller has NODE_ENV=production', () => {

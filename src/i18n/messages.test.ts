@@ -3,6 +3,13 @@ import en from './en.json';
 import zh from './zh.json';
 
 describe('i18n messages', () => {
+  it('localizes the persistent title character limit', () => {
+    expect(en.titleCharacterLimit).toContain('{{current}}/{{max}}');
+    expect(en.titleCharacterLimit).toMatch(/Maximum/);
+    expect(zh.titleCharacterLimit).toContain('{{current}}/{{max}}');
+    expect(zh.titleCharacterLimit).toContain('最多');
+  });
+
   it('keeps metadata weather helper copy compact enough for the drawer', () => {
     expect(en.weatherAutoHint).not.toMatch(/Weather is queried after the city resolves/);
     expect(en.weatherAutoHint.length).toBeLessThanOrEqual(42);

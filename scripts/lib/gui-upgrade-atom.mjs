@@ -6,16 +6,13 @@ import { resolvePythonCommand } from './python-interpreter.mjs';
 export const GUI_UPGRADE_SCHEMA_VERSION = 'gui.upgrade.v0';
 export const GUI_UPGRADE_COMMAND = 'gui-upgrade';
 const REQUIRED_DEV_DEPENDENCIES = ['vite', 'typescript', 'eslint', 'vitest'];
-const NPM_INSTALL_COMMAND = 'npm ci --include=dev';
 const BACKEND_PYTHON_SUPPORTED_RANGE = '3.11-3.13';
 const BACKEND_PYTHON_MIN = { major: 3, minor: 11 };
 const BACKEND_PYTHON_MAX = { major: 3, minor: 13 };
 const REQUIRED_BACKEND_MODULES = ['fastapi', 'uvicorn', 'pydantic_core', 'PIL'];
-const BACKEND_REQUIREMENTS_RELATIVE = 'backend/requirements.txt';
 const CLI_MINIMUM_VERSION_FALLBACK = '1.4.5';
 const CLI_VERSION_COMMAND = 'life-index --version';
-const VERIFY_STACK_COMMAND = 'npm run verify-stack';
-const SYNC_SKILL_COMMAND = 'npm run sync-skill';
+const REINSTALL_PLAYBOOK = 'docs/AGENT_UPDATE_PLAYBOOK.md';
 const CLI_FEATURE_GATES = [
   {
     id: 'entity_review_cards',
@@ -77,34 +74,6 @@ function execText(command, args, { cwd, commandRunner = defaultCommandRunner }) 
 function tryExecText(command, args, { cwd, commandRunner }) {
   try {
     return { ok: true, stdout: execText(command, args, { cwd, commandRunner }) };
-  } catch (error) {
-    return {
-      ok: false,
-      stdout: normalizeCommandOutput(error.stdout),
-      stderr: normalizeCommandOutput(error.stderr),
-      message: error.message,
-    };
-  }
-}
-
-function tryRunCommand(command, args, { cwd, commandRunner = defaultCommandRunner }) {
-  try {
-    const result = commandRunner(command, args, { cwd });
-    if (typeof result === 'string' || Buffer.isBuffer(result)) {
-      return { ok: true, stdout: normalizeCommandOutput(result), stderr: '', message: '' };
-    }
-
-    const status = typeof result?.status === 'number' ? result.status : (result?.ok === false ? 1 : 0);
-    const output = {
-      ok: status === 0 && !result?.error,
-      stdout: normalizeCommandOutput(result?.stdout),
-      stderr: normalizeCommandOutput(result?.stderr),
-      message: result?.message || result?.error?.message || '',
-    };
-    if (!output.ok && !output.message) {
-      output.message = `${formatCommand(command, args)} failed`;
-    }
-    return output;
   } catch (error) {
     return {
       ok: false,
@@ -281,7 +250,7 @@ function detectRepo(repoRoot, commandRunner) {
   const rootResult = tryExecText('git', ['rev-parse', '--show-toplevel'], { cwd: repoRoot, commandRunner });
   const root = rootResult.ok ? resolve(rootResult.stdout) : resolve(repoRoot);
   const packageInfo = readPackageJson(root);
-  const dirtyResult = tryExecText('git', ['status', '--porcelain=v1'], { cwd: root, commandRunner });
+  const dirtyResult = tryExecText('git', ['--no-optional-locks', 'status', '--porcelain=v1'], { cwd: root, commandRunner });
   const branchResult = tryExecText('git', ['branch', '--show-current'], { cwd: root, commandRunner });
   const headResult = tryExecText('git', ['rev-parse', 'HEAD'], { cwd: root, commandRunner });
   const upstreamResult = tryExecText(
@@ -376,7 +345,6 @@ function detectNode(repoRoot, env, commandRunner) {
     missing_dev_dependencies: missingDevDeps,
     dev_dependencies_present: missingDevDeps.length === 0,
     package_lock_present: existsSync(join(repoRoot, 'package-lock.json')),
-    install_command: NPM_INSTALL_COMMAND,
     version: process.version,
     exec_path: process.execPath,
   };
@@ -385,7 +353,6 @@ function detectNode(repoRoot, env, commandRunner) {
 function detectPython(repoRoot, env, commandRunner) {
   const command = resolvePythonCommand({ repoRoot, env });
   const requirementsFile = join(repoRoot, 'backend', 'requirements.txt');
-  const installCommand = `${command} -m pip install -r ${BACKEND_REQUIREMENTS_RELATIVE}`;
 
   if (!existsSync(requirementsFile)) {
     return {
@@ -396,7 +363,6 @@ function detectPython(repoRoot, env, commandRunner) {
       backend_requirements_present: true,
       missing_backend_modules: [],
       requirements_file: requirementsFile,
-      install_command: installCommand,
       checked: false,
       skipped: true,
       reason: 'backend requirements file is not present in this fixture checkout.',
@@ -418,7 +384,6 @@ function detectPython(repoRoot, env, commandRunner) {
     backend_requirements_present: false,
     missing_backend_modules: [],
     requirements_file: requirementsFile,
-    install_command: installCommand,
     checked: true,
   };
 
@@ -532,6 +497,7 @@ function makeNoopRecommendation() {
     description: 'GUI checkout is up to date; no git freshness action needed.',
     command: null,
     side_effect: 'read',
+    reason: 'The dedicated GUI program environment is current and healthy.',
     safe_to_run: true,
     requires_human: false,
   };
@@ -540,7 +506,7 @@ function makeNoopRecommendation() {
 function makeUnknownFreshnessAction() {
   return {
     id: 'resolve_unknown_git_freshness',
-    description: 'Git freshness cannot be determined. Verify upstream, branch, and remote reachability.',
+    description: 'Leave the existing checkout untouched; ask its owner to inspect upstream, branch, and remote reachability.',
     side_effect: 'read',
     command: 'git remote -v',
     reason: 'Upstream is missing, HEAD is detached, or the remote is unreachable.',
@@ -552,137 +518,36 @@ function makeUnknownFreshnessAction() {
 function makeDirtyAction(repo) {
   return {
     id: 'resolve_dirty_worktree',
-    description: 'Resolve local GUI worktree changes before running the upgrade atom.',
+    description: 'Leave the dirty GUI checkout untouched; its owner must review the local changes.',
     side_effect: 'read',
-    command: 'git status --porcelain',
+    command: 'git --no-optional-locks status --porcelain',
     reason: `Dirty worktree blocks automated GUI upgrade apply: ${repo.dirty_files.join(', ')}`,
     safe_to_run: false,
     requires_human: true,
-    suggested_manual_resolution: 'Commit, stash, or discard local changes before applying the upgrade.',
   };
 }
 
 function makeAheadAction() {
   return {
     id: 'resolve_ahead_branch',
-    description: 'Local branch is ahead of upstream. Manual branch resolution is required before upgrade.',
+    description: 'Leave the ahead GUI checkout untouched; its owner must review the local commits.',
     side_effect: 'read',
-    command: 'git status --porcelain',
+    command: 'git --no-optional-locks status --porcelain',
     reason: 'Local branch has commits not present on upstream.',
     safe_to_run: false,
     requires_human: true,
-    suggested_manual_resolution:
-      'Review local commits and decide whether to open a PR, push to the correct remote, or reset manually outside the upgrade atom.',
   };
 }
 
 function makeDivergedAction() {
   return {
     id: 'resolve_diverged_branch',
-    description: 'Local and upstream branches have diverged. Manual resolution required.',
+    description: 'Leave the diverged GUI checkout untouched; its owner must review the branch state.',
     side_effect: 'read',
-    command: 'git status --porcelain',
+    command: 'git --no-optional-locks status --porcelain',
     reason: 'Local branch has diverged from upstream with both local-only and remote-only commits.',
     safe_to_run: false,
     requires_human: true,
-  };
-}
-
-function makePullFfOnlyAction() {
-  return {
-    id: 'git_pull_ff_only',
-    description: 'Fast-forward local branch to match upstream.',
-    side_effect: 'write',
-    command: 'git pull --ff-only',
-    reason: 'Local branch is behind upstream with no local-only commits.',
-    safe_to_run: true,
-    requires_human: false,
-  };
-}
-
-function makeRefreshThenPullAction() {
-  return {
-    id: 'git_refresh_then_pull_ff_only',
-    description: 'Refresh tracking information and fast-forward to upstream.',
-    side_effect: 'write',
-    command: 'git fetch --prune && git pull --ff-only',
-    reason: 'Remote tracking information is stale; local counts show 0/0 but remote has moved.',
-    safe_to_run: true,
-    requires_human: false,
-  };
-}
-
-function makeClearNodeEnvProductionAction() {
-  return {
-    id: 'clear_node_env_production',
-    description: 'NODE_ENV=production is active; clear it before installing GUI devDependencies.',
-    side_effect: 'read',
-    command: null,
-    reason: 'Production NODE_ENV can make npm omit devDependencies while still reporting install success.',
-    safe_to_run: false,
-    requires_human: true,
-    suggested_manual_resolution: {
-      posix: 'unset NODE_ENV && npm ci --include=dev',
-      powershell: "$env:NODE_ENV=''; npm ci --include=dev",
-    },
-  };
-}
-
-function makeRestoreNpmOmitDevAction(node) {
-  return {
-    id: 'restore_npm_omit_dev',
-    description: 'npm omit includes dev; restore npm configuration before installing GUI devDependencies.',
-    side_effect: 'read',
-    command: 'npm config get omit',
-    reason: `npm omit is ${node.npm_omit.join(', ')}, so npm may skip devDependencies.`,
-    safe_to_run: false,
-    requires_human: true,
-    suggested_manual_resolution: {
-      posix: 'npm config delete omit || npm config set omit ""',
-      powershell: 'npm config delete omit; if ($LASTEXITCODE -ne 0) { npm config set omit "" }',
-    },
-  };
-}
-
-function makeNpmCiIncludeDevAction(node) {
-  return {
-    id: 'npm_ci_include_dev',
-    description: 'Install missing GUI Node devDependencies with npm including dev dependencies.',
-    side_effect: 'write',
-    command: NPM_INSTALL_COMMAND,
-    reason: `Missing required GUI devDependencies: ${node.missing_dev_dependencies.join(', ')}`,
-    safe_to_run: true,
-    requires_human: false,
-  };
-}
-
-function makeBackendPythonVersionAction(python) {
-  return {
-    id: 'resolve_backend_python_version',
-    description: 'Resolve unsupported GUI backend Python before installing backend requirements.',
-    side_effect: 'read',
-    command: `${python.command} --version`,
-    reason: `GUI backend supports Python ${BACKEND_PYTHON_SUPPORTED_RANGE}; detected ${python.version ?? 'unknown'}.`,
-    safe_to_run: false,
-    requires_human: true,
-    suggested_manual_resolution: {
-      posix:
-        'python3.13 -m venv .venv && . .venv/bin/activate && python -m pip install -r backend/requirements.txt',
-      powershell:
-        'py -3.13 -m venv .venv; .venv\\Scripts\\python.exe -m pip install -r backend/requirements.txt',
-    },
-  };
-}
-
-function makePipInstallBackendRequirementsAction(python) {
-  return {
-    id: 'pip_install_backend_requirements',
-    description: 'Install missing GUI backend Python runtime requirements.',
-    side_effect: 'write',
-    command: python.install_command,
-    reason: `Missing backend Python modules: ${python.missing_backend_modules.join(', ')}`,
-    safe_to_run: true,
-    requires_human: false,
   };
 }
 
@@ -703,156 +568,17 @@ function cliDependencyReason(cliDependency) {
   return 'Life Index CLI dependency requires manual resolution.';
 }
 
-function makeResolveCliDependencyAction(cliDependency) {
+function makeReinstallGuiAction(reasons) {
   return {
-    id: 'resolve_cli_dependency',
-    description: 'Resolve Life Index CLI dependency before GUI upgrade apply.',
-    side_effect: 'read',
-    command: CLI_VERSION_COMMAND,
-    reason: cliDependencyReason(cliDependency),
+    id: 'reinstall_gui',
+    description:
+      `Leave the existing GUI checkout and shared/global environments untouched. Create a fresh dedicated install by following ${REINSTALL_PLAYBOOK}.`,
+    side_effect: 'write',
+    command: null,
+    reason: reasons.join(' '),
     safe_to_run: false,
     requires_human: true,
-    suggested_manual_resolution: {
-      posix:
-        'Run life-index upgrade --plan --json to inspect CLI-owned upgrade steps, or manually install/upgrade the CLI outside the GUI atom, for example: python -m pip install --upgrade life-index. Then rerun npm run gui-upgrade:plan -- --json.',
-      powershell:
-        'Run life-index upgrade --plan --json to inspect CLI-owned upgrade steps, or manually install/upgrade the CLI outside the GUI atom, for example: py -m pip install --upgrade life-index. Then rerun npm run gui-upgrade:plan -- --json.',
-    },
   };
-}
-
-function makeVerifyStackAction() {
-  return {
-    id: 'verify_stack',
-    description: 'Run GUI stack verification after safe upgrade actions complete.',
-    side_effect: 'write',
-    command: VERIFY_STACK_COMMAND,
-    reason: 'All upgrade dependency checks are safe; verify the local GUI stack before reporting success.',
-    safe_to_run: true,
-    requires_human: false,
-  };
-}
-
-function makeSyncSkillAction() {
-  return {
-    id: 'sync_skill',
-    description: 'Refresh the Life Index GUI host-agent skill after stack verification succeeds.',
-    side_effect: 'write',
-    command: SYNC_SKILL_COMMAND,
-    reason: 'The GUI stack is verified; deliver the current launch/operation skill to the host agent registry.',
-    safe_to_run: true,
-    requires_human: false,
-  };
-}
-
-function makeAppliedGitAction(id, command) {
-  return { id, command };
-}
-
-function makeAppliedAction(id, command) {
-  return { id, command };
-}
-
-function makeGitError(command, result) {
-  return {
-    command,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    message: result.message,
-  };
-}
-
-function makeNpmError(command, result) {
-  return {
-    command,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    message: result.message,
-  };
-}
-
-function makePipError(command, result) {
-  return {
-    command,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    message: result.message,
-  };
-}
-
-function makeVerifyError(command, result) {
-  return {
-    command,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    message: result.message,
-  };
-}
-
-function makeSkillError(command, result) {
-  return {
-    command,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    message: result.message,
-  };
-}
-
-function makeVerificationData(verification = {}) {
-  return {
-    verify_stack_command: VERIFY_STACK_COMMAND,
-    required: true,
-    verified: Boolean(verification.verified),
-    last_result: verification.lastResult ?? null,
-  };
-}
-
-function makeSkillDeliveryData(skillDelivery = {}) {
-  return {
-    skill_name: 'life-index-gui',
-    sync_command: SYNC_SKILL_COMMAND,
-    delivered: Boolean(skillDelivery.delivered),
-    last_result: skillDelivery.lastResult ?? null,
-  };
-}
-
-function makeApplyFailure({ plan, code, message, appliedActions, gitError, npmError, pipError, verifyError, skillError }) {
-  return {
-    ...plan,
-    success: false,
-    mode: 'apply',
-    data: {
-      ...plan.data,
-      applied_actions: appliedActions,
-      ...(gitError ? { git_error: gitError } : {}),
-      ...(npmError ? { npm_error: npmError } : {}),
-      ...(pipError ? { pip_error: pipError } : {}),
-      ...(verifyError ? { verify_error: verifyError } : {}),
-      ...(skillError ? { skill_error: skillError } : {}),
-    },
-    error: {
-      code,
-      message,
-    },
-  };
-}
-
-function isCurrentRepo(repo) {
-  return !repo.dirty
-    && repo.upstream
-    && repo.ahead === 0
-    && repo.behind === 0
-    && repo.freshness === 'current'
-    && repo.remote_probe.status !== 'unreachable';
-}
-
-function isSafeFastForwardRepo(repo) {
-  return !repo.dirty
-    && repo.upstream
-    && repo.ahead === 0
-    && repo.behind > 0
-    && repo.freshness === 'behind'
-    && repo.remote_probe.status !== 'unreachable';
 }
 
 function selectRecommendedNextStep(actions) {
@@ -867,16 +593,13 @@ function buildPlanData({
   repoRoot = process.cwd(),
   env = process.env,
   commandRunner,
-  verification,
-  skillDelivery,
 } = {}) {
   const repo = detectRepo(repoRoot, commandRunner);
   const node = detectNode(repo.path, env, commandRunner);
   const python = detectPython(repo.path, env, commandRunner);
   const cliDependency = detectCliDependency(repo.path, commandRunner);
-  const verificationData = makeVerificationData(verification);
-  const skillDeliveryData = makeSkillDeliveryData(skillDelivery);
   const actions = [];
+  const reinstallReasons = [];
   let partial = false;
 
   if (repo.freshness === 'unknown') {
@@ -890,49 +613,47 @@ function buildPlanData({
     actions.push(makeDivergedAction());
   } else if (repo.freshness === 'behind') {
     if (repo.remote_probe.status === 'stale_tracking') {
-      actions.push(makeRefreshThenPullAction());
+      reinstallReasons.push('GUI checkout tracking is stale and the remote has moved.');
     } else {
-      actions.push(makePullFfOnlyAction());
+      reinstallReasons.push('The dedicated GUI checkout is behind upstream.');
     }
   }
 
-  const hasUnsafeGitAction = actions.some((action) => !action.safe_to_run || action.requires_human);
-  if (isNodeEnvProduction(env)) {
-    actions.push(makeClearNodeEnvProductionAction());
-  } else if (node.npm_omit.includes('dev')) {
-    actions.push(makeRestoreNpmOmitDevAction(node));
-  } else if (!hasUnsafeGitAction && !node.dev_dependencies_present) {
-    actions.push(makeNpmCiIncludeDevAction(node));
+  if (actions.length === 0) {
+    if (isNodeEnvProduction(env)) {
+      reinstallReasons.push('NODE_ENV=production makes this GUI program environment unsupported.');
+    }
+    if (node.npm_omit.includes('dev')) {
+      reinstallReasons.push(`npm omit includes dev (${node.npm_omit.join(', ')}), so this GUI program environment is unsupported.`);
+    }
+    if (!node.dev_dependencies_present) {
+      reinstallReasons.push(`Required GUI Node dependencies are missing: ${node.missing_dev_dependencies.join(', ')}.`);
+    }
+    if (!python.supported) {
+      reinstallReasons.push(`GUI backend Python is unsupported; expected ${BACKEND_PYTHON_SUPPORTED_RANGE}, detected ${python.version ?? 'unknown'}.`);
+    } else if (!python.backend_requirements_present) {
+      reinstallReasons.push(`GUI backend dependencies are missing: ${python.missing_backend_modules.join(', ')}.`);
+    }
+    if (cliDependency.status !== 'ok') {
+      reinstallReasons.push(`CLI dependency is inconsistent. ${cliDependencyReason(cliDependency)}`);
+      if (cliDependency.status === 'missing' || cliDependency.status === 'unknown') partial = true;
+    }
+    if (reinstallReasons.length > 0) {
+      actions.push(makeReinstallGuiAction(reinstallReasons));
+    }
   }
 
-  if (!python.supported) {
-    actions.push(makeBackendPythonVersionAction(python));
-  } else if (!hasUnsafeGitAction && !python.backend_requirements_present) {
-    actions.push(makePipInstallBackendRequirementsAction(python));
-  }
-
-  if (cliDependency.status !== 'ok') {
-    actions.push(makeResolveCliDependencyAction(cliDependency));
-    if (cliDependency.status === 'missing' || cliDependency.status === 'unknown') partial = true;
-  }
-
-  const hasUnsafeAction = actions.some((action) => !action.safe_to_run || action.requires_human);
-  if (!hasUnsafeAction && !verificationData.verified) {
-    actions.push(makeVerifyStackAction());
-  }
-  if (!hasUnsafeAction && !skillDeliveryData.delivered) {
-    actions.push(makeSyncSkillAction());
-  }
+  const reinstallRequired = actions.some((action) => action.id === 'reinstall_gui');
 
   return {
     repo,
     node,
     python,
     cli_dependency: cliDependency,
-    verification: verificationData,
-    skill_delivery: skillDeliveryData,
     actions,
     recommended_next_step: selectRecommendedNextStep(actions),
+    reinstall_required: reinstallRequired,
+    reinstall_playbook: REINSTALL_PLAYBOOK,
     partial,
   };
 }
@@ -950,237 +671,53 @@ export function planGuiUpgrade(options = {}) {
 // Apply.
 
 export function applyGuiUpgrade(options = {}) {
+  const plan = planGuiUpgrade(options);
   const appliedActions = [];
-  const verificationState = {
-    verified: false,
-    lastResult: null,
-  };
-  const skillDeliveryState = {
-    delivered: false,
-    lastResult: null,
-  };
-  const maxApplySteps = 8;
-
-  for (let step = 0; step < maxApplySteps; step += 1) {
-    const planOptions = { ...options, verification: verificationState, skillDelivery: skillDeliveryState };
-    const plan = planGuiUpgrade(planOptions);
-    const blockedActions = plan.data.actions.filter(
-      (action) => !action.safe_to_run || action.requires_human,
-    );
-
-    if (blockedActions.length > 0) {
-      return {
-        ...plan,
-        success: false,
-        mode: 'apply',
-        data: {
-          ...plan.data,
-          applied_actions: appliedActions,
-        },
-        error: {
-          code: 'GUI_UPGRADE_UNSAFE_ACTIONS',
-          message: 'GUI upgrade apply refused because the plan contains unsafe or human-required actions.',
-          action_ids: blockedActions.map((action) => action.id),
-        },
-      };
-    }
-
-    if (plan.data.actions.length === 0) {
-      return {
-        ...plan,
-        success: true,
-        mode: 'apply',
-        data: {
-          ...plan.data,
-          applied_actions: appliedActions,
-        },
-      };
-    }
-
-    const cwd = plan.data.repo.path;
-    const action = plan.data.actions[0];
-
-    if (action.id === 'git_pull_ff_only') {
-      const result = tryExecText('git', ['pull', '--ff-only'], { cwd, commandRunner: options.commandRunner });
-      if (!result.ok) {
-        return makeApplyFailure({
-          plan,
-          code: 'GUI_UPGRADE_GIT_PULL_FAILED',
-          message: 'git pull --ff-only failed; GUI upgrade apply stopped without recording the failed pull.',
-          appliedActions,
-          gitError: makeGitError('git pull --ff-only', result),
-        });
-      }
-      appliedActions.push(makeAppliedGitAction('git_pull_ff_only', 'git pull --ff-only'));
-      continue;
-    } else if (action.id === 'git_refresh_then_pull_ff_only') {
-      const fetchResult = tryExecText('git', ['fetch', '--prune'], { cwd, commandRunner: options.commandRunner });
-      if (!fetchResult.ok) {
-        return makeApplyFailure({
-          plan,
-          code: 'GUI_UPGRADE_GIT_FETCH_FAILED',
-          message: 'git fetch --prune failed; GUI upgrade apply stopped before pull.',
-          appliedActions,
-          gitError: makeGitError('git fetch --prune', fetchResult),
-        });
-      }
-      appliedActions.push(makeAppliedGitAction('git_fetch_prune', 'git fetch --prune'));
-
-      const freshPlan = planGuiUpgrade(planOptions);
-      const freshRepo = freshPlan.data.repo;
-
-      if (isCurrentRepo(freshRepo)) {
-        continue;
-      }
-
-      if (!isSafeFastForwardRepo(freshRepo)) {
-        return makeApplyFailure({
-          plan: freshPlan,
-          code: 'GUI_UPGRADE_GIT_RECHECK_UNSAFE',
-          message: 'GUI upgrade apply refused to pull because the post-fetch git state is no longer a safe fast-forward.',
-          appliedActions,
-        });
-      }
-
-      const pullResult = tryExecText('git', ['pull', '--ff-only'], { cwd, commandRunner: options.commandRunner });
-      if (!pullResult.ok) {
-        return makeApplyFailure({
-          plan: freshPlan,
-          code: 'GUI_UPGRADE_GIT_PULL_FAILED',
-          message: 'git pull --ff-only failed after fetch; GUI upgrade apply stopped without recording the failed pull.',
-          appliedActions,
-          gitError: makeGitError('git pull --ff-only', pullResult),
-        });
-      }
-      appliedActions.push(makeAppliedGitAction('git_pull_ff_only', 'git pull --ff-only'));
-      continue;
-    } else if (action.id === 'npm_ci_include_dev') {
-      const npmResult = tryExecText('npm', ['ci', '--include=dev'], { cwd, commandRunner: options.commandRunner });
-      if (!npmResult.ok) {
-        return makeApplyFailure({
-          plan,
-          code: 'GUI_UPGRADE_NPM_CI_FAILED',
-          message: 'npm ci --include=dev failed; GUI upgrade apply stopped without recording the failed install.',
-          appliedActions,
-          npmError: makeNpmError(NPM_INSTALL_COMMAND, npmResult),
-        });
-      }
-      appliedActions.push(makeAppliedAction('npm_ci_include_dev', NPM_INSTALL_COMMAND));
-      continue;
-    } else if (action.id === 'pip_install_backend_requirements') {
-      const python = plan.data.python;
-      const pipResult = tryExecText(
-        python.command,
-        ['-m', 'pip', 'install', '-r', BACKEND_REQUIREMENTS_RELATIVE],
-        { cwd, commandRunner: options.commandRunner },
-      );
-      if (!pipResult.ok) {
-        return makeApplyFailure({
-          plan,
-          code: 'GUI_UPGRADE_PIP_INSTALL_FAILED',
-          message: 'Python backend requirements install failed; GUI upgrade apply stopped without recording the failed install.',
-          appliedActions,
-          pipError: makePipError(python.install_command, pipResult),
-        });
-      }
-      appliedActions.push(makeAppliedAction('pip_install_backend_requirements', python.install_command));
-      continue;
-    } else if (action.id === 'verify_stack') {
-      const verifyResult = tryRunCommand('npm', ['run', 'verify-stack'], {
-        cwd,
-        commandRunner: options.commandRunner,
-      });
-      if (!verifyResult.ok) {
-        verificationState.verified = false;
-        verificationState.lastResult = {
-          ok: false,
-          stdout: verifyResult.stdout,
-          stderr: verifyResult.stderr,
-        };
-        return makeApplyFailure({
-          plan: {
-            ...plan,
-            data: {
-              ...plan.data,
-              verification: makeVerificationData(verificationState),
-            },
-          },
-          code: 'GUI_UPGRADE_VERIFY_STACK_FAILED',
-          message: 'npm run verify-stack failed; GUI upgrade apply stopped without recording the failed verification.',
-          appliedActions,
-          verifyError: makeVerifyError(VERIFY_STACK_COMMAND, verifyResult),
-        });
-      }
-      verificationState.verified = true;
-      verificationState.lastResult = {
-        ok: true,
-        stdout: verifyResult.stdout,
-        stderr: verifyResult.stderr,
-      };
-      appliedActions.push(makeAppliedAction('verify_stack', VERIFY_STACK_COMMAND));
-      continue;
-    } else if (action.id === 'sync_skill') {
-      const syncResult = tryRunCommand('npm', ['run', 'sync-skill'], {
-        cwd,
-        commandRunner: options.commandRunner,
-      });
-      let syncPayload = null;
-      if (syncResult.ok) {
-        try {
-          syncPayload = JSON.parse(syncResult.stdout);
-        } catch (error) {
-          syncResult.ok = false;
-          syncResult.message = `sync-skill stdout was not JSON: ${error.message}`;
-        }
-      }
-      if (syncResult.ok && syncPayload?.delivered !== true) {
-        syncResult.ok = false;
-        syncResult.message = syncPayload?.message || 'sync-skill did not report delivered:true.';
-      }
-      if (!syncResult.ok) {
-        skillDeliveryState.delivered = false;
-        skillDeliveryState.lastResult = {
-          ok: false,
-          stdout: syncResult.stdout,
-          stderr: syncResult.stderr,
-        };
-        return makeApplyFailure({
-          plan: {
-            ...plan,
-            data: {
-              ...plan.data,
-              skill_delivery: makeSkillDeliveryData(skillDeliveryState),
-            },
-          },
-          code: 'GUI_UPGRADE_SYNC_SKILL_FAILED',
-          message: 'npm run sync-skill failed; GUI upgrade apply stopped without recording the failed skill sync.',
-          appliedActions,
-          skillError: makeSkillError(SYNC_SKILL_COMMAND, syncResult),
-        });
-      }
-      skillDeliveryState.delivered = true;
-      skillDeliveryState.lastResult = {
-        ok: true,
-        stdout: syncResult.stdout,
-        stderr: syncResult.stderr,
-      };
-      appliedActions.push(makeAppliedAction('sync_skill', SYNC_SKILL_COMMAND));
-      continue;
-    }
+  const reinstallAction = plan.data.actions.find((action) => action.id === 'reinstall_gui');
+  if (reinstallAction) {
+    return {
+      ...plan,
+      success: false,
+      mode: 'apply',
+      data: {
+        ...plan.data,
+        applied_actions: appliedActions,
+      },
+      error: {
+        code: 'GUI_UPGRADE_REINSTALL_REQUIRED',
+        message: `A fresh dedicated GUI install is required. Follow ${REINSTALL_PLAYBOOK}; leave the existing checkout and shared/global environments untouched.`,
+        action_ids: [reinstallAction.id],
+      },
+    };
   }
 
-  const finalPlan = planGuiUpgrade({ ...options, verification: verificationState, skillDelivery: skillDeliveryState });
+  const blockedActions = plan.data.actions.filter(
+    (action) => !action.safe_to_run || action.requires_human,
+  );
+  if (blockedActions.length > 0) {
+    return {
+      ...plan,
+      success: false,
+      mode: 'apply',
+      data: {
+        ...plan.data,
+        applied_actions: appliedActions,
+      },
+      error: {
+        code: 'GUI_UPGRADE_UNSAFE_ACTIONS',
+        message: 'GUI upgrade apply refused because the plan contains human-owned diagnostics.',
+        action_ids: blockedActions.map((action) => action.id),
+      },
+    };
+  }
+
   return {
-    ...finalPlan,
-    success: false,
+    ...plan,
+    success: true,
     mode: 'apply',
     data: {
-      ...finalPlan.data,
+      ...plan.data,
       applied_actions: appliedActions,
-    },
-    error: {
-      code: 'GUI_UPGRADE_APPLY_STEPS_EXHAUSTED',
-      message: 'GUI upgrade apply stopped after too many replan/apply steps.',
     },
   };
 }

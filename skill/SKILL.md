@@ -32,10 +32,15 @@ The normative cross-layer roles and CURRENT/TARGET delivery status live in the G
   consent and normal Save, AI+
   preserves Host Agent terminality and safe evidence navigation, and journal
   editing stays in detail context through the existing write authority.
-- Current shared-program state is D4 corrected `GO`; D5 newline-JSON-RPC is
-  `DEFERRED / NOT NECESSARY NOW`; D6-A is `ACCEPTED`; and D6-B is
-  `NOT_DISPATCHED`. These states do not authorize merge, release, or public
-  synchronization.
+- The bounded 0.5.1 friction package exists in source. Actual shipped state
+  must be verified from `package.json`, `CHANGELOG.md`, and the public
+  tag/release rather than frozen phase prose.
+- D5 newline-JSON-RPC remains `DEFERRED / NOT NECESSARY NOW`.
+- The CLI retains all Life Index data and write authority; direct L1 access
+  remains forbidden.
+- The runtime-neutral Host Agent handoff contract is unchanged. This source
+  package does not establish Hermes GUI AI+ compatibility; it remains
+  `NOT_SUPPORTED_NOT_PROVEN`.
 
 ## Before Starting
 
@@ -110,18 +115,15 @@ node scripts/stop-all.mjs
 
 ## Upgrade And Operations
 
-Use the GUI upgrade atom before manual repair:
+Upgrade rule: use the atom only for read-only diagnosis. It never repairs the
+installed checkout in place. If it reports `reinstall_gui` or
+`GUI_UPGRADE_REINSTALL_REQUIRED`, leave the existing checkout and any
+shared/global Python environment untouched, then create a fresh dedicated GUI
+install by following `docs/AGENT_UPDATE_PLAYBOOK.md`. Run `verify-stack`
+separately after the clean install.
 
 ```bash
 cd "{{GUI_INSTALL_PATH}}"
 npm run gui-upgrade:plan
 npm run gui-upgrade:apply
 ```
-
-If a manual skill refresh reports multiple host skill registries, choose one explicitly:
-
-```bash
-npm run sync-skill -- --host-skill-dir ~/.hermes/skills
-```
-
-Full upgrade and operations guidance: `docs/AGENT_UPDATE_PLAYBOOK.md`.

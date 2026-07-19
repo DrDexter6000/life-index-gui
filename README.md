@@ -162,14 +162,14 @@ npm run sync-skill
 
 ## 升级
 
-宿主 agent 应优先使用 GUI upgrade atom：
+宿主 agent 应先使用 GUI upgrade atom 做只读诊断：
 
 ```bash
 npm run gui-upgrade:plan
 npm run gui-upgrade:apply
 ```
 
-它会以 fail-closed JSON 检查并处理安全的本地 git、Node、Python backend、CLI feature gate 和 `verify-stack` 状态。完整升级与运维步骤见 [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md)。
+`plan` 只检查 checkout、Node、Python backend 和 CLI 依赖状态；`apply` 不会在原地运行 git、npm、pip、skill sync 或 stack verification。需要更新或程序环境不一致时，它会以 `GUI_UPGRADE_REINSTALL_REQUIRED` fail closed，并要求保留现有 checkout 与共享/全局环境不动，按照 [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md) 新建一个干净的专用 GUI 安装。`npm run verify-stack` 是新安装完成后的独立验证步骤。
 
 ## 手机临时访问
 

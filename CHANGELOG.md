@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-19
+
+- Removed runtime external font/CDN requests while retaining outlined and rounded icons through local Material Symbols icon fonts from exact `@fontsource` production dependencies.
+- Replaced frozen D6 release-state prose in the exported GUI Skill with durable source-versus-shipped wording. Actual publication still requires verification against `package.json`, `CHANGELOG.md`, and the public tag/release; Hermes GUI AI+ compatibility is not claimed.
+- Added always-visible, localized 20-character limit feedback to the title input without changing the existing write authority or schema.
+- Corrected GUI program-environment lifecycle handling: the upgrade atom is now read-only planning plus fail-closed reinstall guidance, never in-place git/npm/pip/skill/verification mutation. Healthy current installs remain a truthful no-op; replacement leaves existing checkouts and shared/global environments untouched and points to a fresh dedicated GUI install.
+
 ## [0.5.0] - 2026-07-17
 
 ### What users get

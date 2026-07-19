@@ -14,7 +14,7 @@ function parseArgs(argv) {
     return { ok: false, code: 'GUI_UPGRADE_INVALID_ARGS', message: 'Use --plan --json or --apply --json.' };
   }
   if (!json) {
-    return { ok: false, code: 'GUI_UPGRADE_JSON_REQUIRED', message: 'S1 requires --json so stdout remains machine-parseable.' };
+    return { ok: false, code: 'GUI_UPGRADE_JSON_REQUIRED', message: 'GUI upgrade requires --json so stdout remains machine-parseable.' };
   }
 
   return { ok: true, mode };
@@ -40,6 +40,8 @@ function errorEnvelope({ code, message, mode = 'plan' }) {
         safe_to_run: true,
         requires_human: false,
       },
+      reinstall_required: false,
+      reinstall_playbook: 'docs/AGENT_UPDATE_PLAYBOOK.md',
       partial: true,
     },
     error: { code, message },

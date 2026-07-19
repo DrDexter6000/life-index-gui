@@ -48,10 +48,14 @@ not a GUI route dependency, and the GUI does not migrate to it.
 transport is Human-Owner **DEFERRED / NOT NECESSARY NOW** absent a named non-MCP
 consumer or verified MCP incompatibility.
 
-**CURRENT — D6-A release boundary:** The GUI remains pre-1.0; see
-[`docs/VERSIONING.md`](./VERSIONING.md). D6-A is `ACCEPTED`; D6-B is
-`NOT_DISPATCHED`. No merge, release, or public sync is authorized or has
-occurred.
+**CURRENT — source and shipped-state boundary:** The GUI remains pre-1.0; see
+[`docs/VERSIONING.md`](./VERSIONING.md). The bounded 0.5.1 friction package
+exists in source. Actual shipped state must be verified from `package.json`,
+`CHANGELOG.md`, and the public tag/release rather than frozen phase prose. The
+CLI retains all Life Index data and write authority, direct L1 access remains
+forbidden, and the runtime-neutral Host Agent handoff contract is unchanged.
+This source package does not establish Hermes GUI AI+ compatibility; it remains
+`NOT_SUPPORTED_NOT_PROVEN`.
 
 **CURRENT D3 boundary:** A GUI-owned dashboard provider
 may compose canonical contracts transiently, but it is not a Core dashboard

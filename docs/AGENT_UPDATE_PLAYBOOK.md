@@ -2,120 +2,87 @@
 
 This playbook is for a host agent updating a local Life Index stack. The CLI serves the agent; the GUI serves the human user. The GUI does not bundle a model, planner, or hidden orchestration layer.
 
-## Order
+## Lifecycle Rule
 
-Run the CLI update first, then the GUI upgrade atom. The GUI atom performs the
-safe GUI dependency recovery sequence, runs stack verification, and refreshes
-the GUI host-agent skill before it reports a successful apply.
+Life Index user data is durable and lives outside the GUI repository. The
+dedicated GUI checkout, its `node_modules`, checkout-owned backend virtual
+environment, dependencies, and program caches are disposable program state.
+When that state needs an update or becomes inconsistent, create a fresh
+dedicated install. Do not surgically repair the old install.
 
-## 1. Update Life Index CLI
+Leave the existing GUI checkout untouched while preparing its replacement.
+Never delete or mutate a shared/global Python environment or a developer- or
+user-owned checkout on the GUI atom's behalf. This package intentionally has no
+installer, repair helper, mixed-install detector, or rollback system.
 
-```bash
-cd /path/to/life-index
-git pull --ff-only
-python -m pip install -e .
-sync-skill --install
-life-index health --json
-```
+## 1. Diagnose The Existing GUI Install
 
-Read the health payload before moving on. If it exposes `upgrade_freshness`, treat that field as the CLI-side freshness signal. Stop here if CLI health is unavailable or reports an upgrade that has not been applied.
-
-## 2. Update Life Index GUI
-
-The GUI worktree must be clean before upgrading. If `git status --porcelain`
-prints any path, stop and restore or commit that work before continuing; do not
-try to upgrade over a dirty tree.
-
-Operations discipline: Never commit or push from an operations clone. Keep the clone at zero local changes. Write friction notes and operational notes to the Life Index data directory, not inside the cloned repository.
-
-Host agents can first inspect the GUI checkout with the GUI upgrade atom:
+From the existing dedicated GUI checkout, run:
 
 ```bash
 npm run gui-upgrade:plan -- --json
 npm run gui-upgrade:apply -- --json
 ```
 
-The current GUI upgrade atom emits `gui.upgrade.v0` JSON for planning and
-fail-closed apply checks. It covers git freshness/fast-forward, Node
-devDependencies, `NODE_ENV` / npm omit guards, and Python backend dependency
-preflight/install. It also checks the installed Life Index CLI dependency and
-feature gates, including the global CLI `1.4.5+` floor used by review cards. After all safe
-dependency and git actions are complete, apply runs `npm run verify-stack`, then
-`npm run sync-skill`, and reports both results in JSON. The GUI requires CLI
-`1.4.5+`; an older, missing, or unparseable CLI version is a fail-closed
-dependency error. The atom still does not run public sync, tags, releases, or
-CLI upgrade writes.
+Both entry points preserve the `gui.upgrade.v0` JSON contract. `plan` performs
+read-only diagnostics. `apply` may build the same read-only plan, but it never
+runs git fetch/pull, npm or pip installation, virtual-environment creation,
+`sync-skill`, or `verify-stack`.
 
-If the GUI atom reports `resolve_cli_dependency`, stop the GUI update and fix
-the CLI first through the CLI-owned upgrade flow, for example
-`life-index upgrade --plan --json`, or by manually upgrading the CLI install.
-Then rerun the GUI atom. The GUI atom must not call `life-index upgrade --apply`
-or install/upgrade the CLI itself.
+Behavior is explicit:
+
+- A healthy, current dedicated install returns success with
+  `reinstall_required:false` and no applied actions.
+- A behind or stale checkout, missing Node/backend dependencies, unsupported
+  program environment, or inconsistent CLI dependency produces one
+  human-required `reinstall_gui` action with `command:null`.
+- Apply returns exit 1 with `GUI_UPGRADE_REINSTALL_REQUIRED`,
+  `reinstall_required:true`, and `applied_actions:[]`.
+- Dirty, ahead, diverged, detached, unreachable, or otherwise unknown git state
+  remains a human-owned fail-closed diagnostic. The atom does not suggest
+  deleting or rewriting that checkout.
+
+The GUI requires a compatible Life Index CLI. If the diagnostic reports a CLI
+dependency inconsistency, use the CLI's own public onboarding guidance to
+create or select a compatible CLI environment; do not let this GUI package
+modify a shared/global CLI or a developer checkout.
+
+## 2. Create A Fresh Dedicated GUI Install
+
+Choose a new, empty directory dedicated to the GUI. Keep it separate from the
+existing install and from the external Life Index data directory.
 
 ```bash
-cd /path/to/life-index-gui
-git status --porcelain
-git pull --ff-only
-python --version
-python3.13 -m venv .venv  # if the active Python is outside 3.11-3.13
-source .venv/bin/activate # Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -r backend/requirements.txt
-echo $NODE_ENV
-unset NODE_ENV             # if it printed production
+git clone https://github.com/DrDexter6000/life-index-gui.git life-index-gui-fresh
+cd life-index-gui-fresh
 npm ci --include=dev
-npm run build
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+python -m venv .venv
+source .venv/bin/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -r backend/requirements.txt
 ```
 
-The GUI backend supports Python 3.11-3.13 until upstream `pydantic-core` / `Pillow` wheels cover Python 3.14. If the active interpreter is Python 3.14 or newer, create a Python 3.13 virtual environment before installing backend requirements.
+The checkout-owned `.venv` is part of this dedicated install. Do not target a
+shared/global Python environment. The GUI backend supports Python 3.11-3.13
+until the pinned dependency set supports Python 3.14.
 
-Do not use bare `npm install` during upgrades. node_modules can be incomplete while npm reports "up to date"; `npm ci --include=dev` is the only supported dependency install path for upgrade recovery.
+The GUI upgrade atom does not execute these commands. They are the explicit
+human-owned clean-install path. It also does not remove the prior install;
+leave that checkout untouched while validating the new one.
 
-Before dependency recovery, print `NODE_ENV`. If it is `production`, clear it first; otherwise npm can omit devDependencies even when the lockfile contains them. On POSIX shells use `echo $NODE_ENV` and `unset NODE_ENV`; on Windows PowerShell use `$env:NODE_ENV` and `Remove-Item Env:NODE_ENV`.
+After verification succeeds and the new launcher/path is active, the operator
+who initiated replacement owns cleanup. Remove the old root as one directory
+only after proving it is dedicated managed program state and the external Life
+Index data root is outside it. Never retain versioned rollback directories.
+Leave shared/global, developer-owned, user-owned, or ambiguous roots untouched
+and report them to the owner.
 
-If `npm ci --include=dev` finishes but critical devDependencies are still missing and the verify-stack preflight reports them, use this fallback: `pnpm install && pnpm run build`.
+## 3. Verify And Activate The Fresh Install
 
-```bash
-pnpm install && pnpm run build
-```
-
-Troubleshooting: if GUI dev, test, build, or verify commands report missing devDependencies or module-not-found errors, check `NODE_ENV` first and do not run development validation under `NODE_ENV=production`.
-
-If `pnpm` is not installed yet:
-
-```bash
-npm i -g pnpm
-```
-
-In another shell:
-
-```bash
-curl http://127.0.0.1:8000/api/version
-curl http://127.0.0.1:8000/api/health
-```
-
-The version authority is the backend JSON payload:
-
-- `gui_version`: GUI package version from `package.json`
-- `cli_minimum_version`: minimum CLI version this GUI supports
-- `repo_version`: CLI repository/version marker surfaced by `life-index version`
-- `compatible`: whether the detected CLI package version satisfies the GUI minimum
-
-GUI entity review cards use the global CLI `1.4.5+` compatibility floor because
-they consume the structured review action contract. They do not have a lower
-feature-level exception.
-
-`/api/version` is the concise compatibility surface for agents. `/api/health` carries the same version fields plus detailed CLI health diagnostics for the human-facing GUI.
-
-## 3. Verify the local stack manually
+Run the verifier separately from upgrade planning:
 
 ```bash
 npm run verify-stack
 ```
-
-This is the fallback when running manual recovery steps outside
-`npm run gui-upgrade:apply -- --json`, or when an operator wants to re-run the
-same verification after the atom has already succeeded.
 
 Expected behavior:
 
@@ -126,11 +93,11 @@ Expected behavior:
 - prints one JSON result
 - stops the backend and preview before exiting
 
-If ports are occupied, the verifier only stops processes it can prove belong to this GUI checkout. Unknown processes are never killed.
+If ports are occupied, the verifier only stops processes it can prove belong
+to this fresh GUI checkout. Unknown processes are never killed.
 
-After a manual verification path succeeds, refresh the GUI host-agent skill so
-future host-agent sessions know this checkout's absolute path and launch
-commands:
+After verification succeeds, explicitly deliver the fresh checkout path to the
+host-agent skill registry:
 
 ```bash
 npm run sync-skill
@@ -139,21 +106,16 @@ npm run sync-skill
 The command writes `life-index-gui/SKILL.md` into exactly one detected host
 skill registry. If no registry is present, or multiple possible targets are
 present, it exits non-zero with `delivered:false` JSON instead of silently
-claiming success.
-
-On machines with multiple host skill registries, choose one explicitly:
+claiming success. On machines with multiple registries, choose the intended
+target explicitly:
 
 ```bash
 npm run sync-skill -- --host-skill-dir ~/.hermes/skills
 ```
 
-To clean project-owned leftovers explicitly:
-
-```bash
-npm run stop-all
-```
-
-If `stop-all` reports an unknown port owner, inspect that process manually before retrying.
+The version authority for the fresh install is `/api/version`; `/api/health`
+carries the same version fields plus detailed CLI health diagnostics. Confirm
+`compatible:true` before using GUI features.
 
 ## 4. Start A Temporary Remote GUI Link
 

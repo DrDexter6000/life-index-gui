@@ -161,14 +161,14 @@ This writes the `life-index-gui` launch skill into the existing host skill regis
 
 ## Upgrade
 
-Host agents should start with the GUI upgrade atom:
+Host agents should start with the GUI upgrade atom for read-only diagnostics:
 
 ```bash
 npm run gui-upgrade:plan
 npm run gui-upgrade:apply
 ```
 
-It checks and applies safe local git, Node, Python backend, CLI feature-gate, and `verify-stack` recovery through fail-closed JSON. For the complete upgrade and operations steps, see [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md).
+`plan` only checks checkout, Node, Python backend, and CLI dependency state; `apply` does not run in-place git, npm, pip, skill-sync, or stack-verification work. When an update or inconsistent program environment requires replacement, it fails closed with `GUI_UPGRADE_REINSTALL_REQUIRED` and tells you to leave the existing checkout and shared/global environments untouched while creating a fresh dedicated GUI install via [docs/AGENT_UPDATE_PLAYBOOK.md](docs/AGENT_UPDATE_PLAYBOOK.md). Run `npm run verify-stack` separately after the clean install is complete.
 
 ## Temporary Phone Access
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawnSync, execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,8 +11,8 @@ const repoRoot = resolve(__dirname, '..');
 const guiUpgradeScript = join(repoRoot, 'scripts', 'gui-upgrade.mjs');
 const requiredDevDeps = ['vite', 'typescript', 'eslint', 'vitest'];
 const requiredBackendModules = ['fastapi', 'uvicorn', 'pydantic_core', 'PIL'];
-const cliMinimumVersion = '1.4.5';
-const entityReviewCardsCliVersion = '1.4.5';
+const forbiddenMutation = /git (?:fetch|pull)|npm ci|pip install|npm run (?:sync-skill|verify-stack)/i;
+const playbookPath = 'docs/AGENT_UPDATE_PLAYBOOK.md';
 
 function git(cwd, args) {
   return execFileSync('git', args, {
@@ -22,37 +22,11 @@ function git(cwd, args) {
   }).trim();
 }
 
-function runGitForInjection(command, args, { cwd }) {
-  if (gitCommandId(command, args) === 'life-index --version') {
-    return {
-      status: 0,
-      stdout: `${JSON.stringify({
-        package_version: '1.4.5',
-        bootstrap_manifest: { repo_version: '1.4.5' },
-      })}\n`,
-      stderr: '',
-    };
-  }
-  if (gitCommandId(command, args) === 'npm run verify-stack') {
-    return {
-      status: 0,
-      stdout: `${JSON.stringify({ status: 'ok', source: 'fixture verify-stack' })}\n`,
-      stderr: '',
-    };
-  }
-  if (gitCommandId(command, args) === 'npm run sync-skill') {
-    return {
-      status: 0,
-      stdout: `${JSON.stringify({
-        delivered: true,
-        skill: 'life-index-gui',
-        target: join(cwd, '.fixture-skills', 'life-index-gui', 'SKILL.md'),
-        action: 'updated',
-      })}\n`,
-      stderr: '',
-    };
-  }
+function gitCommandId(command, args) {
+  return `${command} ${args.join(' ')}`;
+}
 
+function runRealCommand(command, args, { cwd }) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
@@ -66,199 +40,47 @@ function runGitForInjection(command, args, { cwd }) {
   };
 }
 
-function gitCommandId(command, args) {
-  return `${command} ${args.join(' ')}`;
-}
-
-function isPythonVersionProbe(args) {
-  return args.length === 2
-    && args[0] === '-c'
-    && args[1].includes('sys.version_info');
-}
-
-function isPythonImportProbe(args) {
-  return args.length === 2
-    && args[0] === '-c'
-    && args[1].includes('importlib.import_module');
-}
-
-function lifeIndexVersionStdout(version) {
-  return `${JSON.stringify({
-    package_version: version,
-    bootstrap_manifest: { repo_version: version },
-  })}\n`;
-}
-
-function makeBackendCommandRunner({
-  pythonCommand = 'python-fixture',
-  version = '3.13.5',
-  missingModules = [],
-  onPipInstall,
+function makeCommandRunner({
+  invoked,
+  pythonVersion = '3.13.5',
+  missingBackendModules = [],
+  cliVersion = '1.4.5',
+  cliStatus = 'ok',
   npmOmit = '',
-  npmVersion = '11.13.0',
 } = {}) {
   return function commandRunner(command, args, context) {
     const id = gitCommandId(command, args);
-    if (id === 'npm --version') return { status: 0, stdout: `${npmVersion}\n`, stderr: '' };
-    if (id === 'npm config get omit') return { status: 0, stdout: `${npmOmit}\n`, stderr: '' };
-    if (command === pythonCommand && isPythonVersionProbe(args)) {
-      return { status: 0, stdout: `${version}\n`, stderr: '' };
-    }
-    if (command === pythonCommand && isPythonImportProbe(args)) {
-      return { status: 0, stdout: `${JSON.stringify({ missing: missingModules })}\n`, stderr: '' };
-    }
-    if (command === pythonCommand && gitCommandId(command, args) === `${pythonCommand} -m pip install -r backend/requirements.txt`) {
-      if (onPipInstall) return onPipInstall();
-      return { status: 0, stdout: 'installed backend requirements\n', stderr: '' };
-    }
-    return runGitForInjection(command, args, context);
-  };
-}
+    invoked?.push(id);
 
-function makeCliCommandRunner({
-  version = '1.4.5',
-  missing = false,
-  stdout,
-  stderr = '',
-  status = 0,
-  fallback = runGitForInjection,
-} = {}) {
-  return function commandRunner(command, args, context) {
-    if (gitCommandId(command, args) === 'life-index --version') {
-      if (missing) {
-        return { status: 1, stdout: '', stderr, message: 'life-index command not found' };
-      }
+    if (command === 'git') return runRealCommand(command, args, context);
+    if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
+    if (id === 'npm config get omit') return { status: 0, stdout: `${npmOmit}\n`, stderr: '' };
+    if (command === 'python-fixture' && args[0] === '-c' && args[1].includes('sys.version_info')) {
+      return { status: 0, stdout: `${pythonVersion}\n`, stderr: '' };
+    }
+    if (command === 'python-fixture' && args[0] === '-c' && args[1].includes('importlib.import_module')) {
       return {
-        status,
-        stdout: stdout ?? lifeIndexVersionStdout(version),
-        stderr,
-        message: status === 0 ? '' : 'life-index --version failed',
+        status: 0,
+        stdout: `${JSON.stringify({ missing: missingBackendModules })}\n`,
+        stderr: '',
       };
     }
-    return fallback(command, args, context);
+    if (id === 'life-index --version') {
+      if (cliStatus === 'missing') {
+        return { status: 1, stdout: '', stderr: 'life-index command not found', message: 'not found' };
+      }
+      if (cliStatus === 'unknown') {
+        return { status: 0, stdout: 'not-a-version\n', stderr: '' };
+      }
+      return {
+        status: 0,
+        stdout: `${JSON.stringify({ package_version: cliVersion })}\n`,
+        stderr: '',
+      };
+    }
+
+    return { status: 99, stdout: '', stderr: `unexpected command: ${id}`, message: 'unexpected command' };
   };
-}
-
-function writeFixtureCli(root, version = '1.4.5') {
-  const bin = join(root, '.fixture-bin');
-  mkdirSync(bin, { recursive: true });
-  const payload = JSON.stringify({
-    package_version: version,
-    bootstrap_manifest: { repo_version: version },
-  }).replace(/"/g, '\\"');
-  const posixPath = join(bin, 'life-index');
-  writeFileSync(posixPath, `#!/bin/sh\nif [ "$1" = "--version" ]; then\n  printf '%s\\n' "${payload}"\n  exit 0\nfi\necho "unsupported fixture command" >&2\nexit 2\n`);
-  try {
-    chmodSync(posixPath, 0o755);
-  } catch {
-    // Windows does not need POSIX executable bits for the .cmd shim below.
-  }
-  writeFileSync(
-    join(bin, 'life-index.cmd'),
-    `@echo off\r\nif "%1"=="--version" (\r\n  echo ${JSON.stringify({
-      package_version: version,
-      bootstrap_manifest: { repo_version: version },
-    })}\r\n  exit /b 0\r\n)\r\necho unsupported fixture command 1>&2\r\nexit /b 2\r\n`,
-  );
-}
-
-function writeFixtureNpm(root) {
-  const bin = join(root, '.fixture-bin');
-  mkdirSync(bin, { recursive: true });
-  const posixPath = join(bin, 'npm');
-  writeFileSync(
-    posixPath,
-    [
-      '#!/bin/sh',
-      'if [ "$1" = "--version" ]; then',
-      "  printf '%s\\n' '11.13.0'",
-      '  exit 0',
-      'fi',
-      'if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "omit" ]; then',
-      "  printf '\\n'",
-      '  exit 0',
-      'fi',
-      'if [ "$1" = "run" ] && [ "$2" = "verify-stack" ]; then',
-      '  node scripts/fixture-verify-stack.mjs',
-      '  exit $?',
-      'fi',
-      'if [ "$1" = "run" ] && [ "$2" = "sync-skill" ]; then',
-      "  printf '%s\\n' '{\"delivered\":true,\"skill\":\"life-index-gui\",\"target\":\"fixture-skill\",\"action\":\"updated\"}'",
-      '  exit 0',
-      'fi',
-      'if [ "$1" = "ci" ] && [ "$2" = "--include=dev" ]; then',
-      "  printf '%s\\n' 'installed dev dependencies'",
-      '  exit 0',
-      'fi',
-      "printf '%s\\n' 'unsupported fixture npm command' >&2",
-      'exit 2',
-      '',
-    ].join('\n'),
-  );
-  try {
-    chmodSync(posixPath, 0o755);
-  } catch {
-    // Windows does not need POSIX executable bits for the .cmd shim below.
-  }
-  writeFileSync(
-    join(bin, 'npm.cmd'),
-    [
-      '@echo off',
-      'if "%1"=="--version" (',
-      '  echo 11.13.0',
-      '  exit /b 0',
-      ')',
-      'if "%1"=="config" if "%2"=="get" if "%3"=="omit" (',
-      '  echo.',
-      '  exit /b 0',
-      ')',
-      'if "%1"=="run" if "%2"=="verify-stack" (',
-      '  node scripts\\fixture-verify-stack.mjs',
-      '  exit /b %ERRORLEVEL%',
-      ')',
-      'if "%1"=="run" if "%2"=="sync-skill" (',
-      '  echo {"delivered":true,"skill":"life-index-gui","target":"fixture-skill","action":"updated"}',
-      '  exit /b 0',
-      ')',
-      'if "%1"=="ci" if "%2"=="--include=dev" (',
-      '  echo installed dev dependencies',
-      '  exit /b 0',
-      ')',
-      'echo unsupported fixture npm command 1>&2',
-      'exit /b 2',
-      '',
-    ].join('\r\n'),
-  );
-}
-
-function commandEnv(cwd, env = {}) {
-  const fixtureBin = join(cwd, '.fixture-bin');
-  return {
-    ...process.env,
-    PATH: `${fixtureBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
-    ...env,
-  };
-}
-
-function runGuiUpgrade(args, { cwd }) {
-  return spawnSync(process.execPath, [guiUpgradeScript, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: commandEnv(cwd),
-  });
-}
-
-function runGuiUpgradeWithEnv(args, { cwd, env }) {
-  return spawnSync(process.execPath, [guiUpgradeScript, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: commandEnv(cwd, env),
-  });
-}
-
-function parseStdoutJson(result) {
-  assert.doesNotThrow(() => JSON.parse(result.stdout), `stdout must be JSON only, got: ${result.stdout}`);
-  return JSON.parse(result.stdout);
 }
 
 function configureGitUser(cwd) {
@@ -280,105 +102,98 @@ function installFixtureDevDeps(root) {
   }
 }
 
-function writeBackendRequirementsFixture(root) {
-  mkdirSync(join(root, 'backend'), { recursive: true });
+function writeFixtureExecutables(root) {
+  const bin = join(root, '.fixture-bin');
+  mkdirSync(bin, { recursive: true });
+  const cliPayload = JSON.stringify({ package_version: '1.4.5' }).replace(/"/g, '\\"');
+  const lifeIndex = join(bin, 'life-index');
+  writeFileSync(lifeIndex, `#!/bin/sh\nprintf '%s\\n' "${cliPayload}"\n`);
+  try { chmodSync(lifeIndex, 0o755); } catch { /* Windows uses the .cmd shim. */ }
+  writeFileSync(join(bin, 'life-index.cmd'), '@echo off\r\necho {"package_version":"1.4.5"}\r\n');
+
+  const npm = join(bin, 'npm');
   writeFileSync(
-    join(root, 'backend', 'requirements.txt'),
+    npm,
     [
-      'fastapi==0.135.2',
-      'uvicorn==0.35.0',
-      'pydantic==2.11.10',
-      'Pillow==10.4.0',
+      '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then printf \'%s\\n\' \'11.13.0\'; exit 0; fi',
+      'if [ "$1" = "config" ]; then printf \'\\n\'; exit 0; fi',
+      'echo "forbidden npm command" >&2',
+      'exit 99',
       '',
     ].join('\n'),
+  );
+  try { chmodSync(npm, 0o755); } catch { /* Windows uses the .cmd shim. */ }
+  writeFileSync(
+    join(bin, 'npm.cmd'),
+    [
+      '@echo off',
+      'if "%1"=="--version" (echo 11.13.0& exit /b 0)',
+      'if "%1"=="config" (echo.& exit /b 0)',
+      'echo forbidden npm command 1>&2',
+      'exit /b 99',
+      '',
+    ].join('\r\n'),
   );
 }
 
 function writePackageFixture(root, { installDevDeps = true, backendRequirements = false } = {}) {
-  const devDependencies = Object.fromEntries(requiredDevDeps.map((dependencyName) => [dependencyName, '0.0.0-test']));
+  const devDependencies = Object.fromEntries(requiredDevDeps.map((name) => [name, '0.0.0-test']));
   writeFileSync(join(root, '.gitignore'), 'node_modules/\n.fixture-bin/\n');
   writeFileSync(
     join(root, 'package.json'),
     `${JSON.stringify({
       name: 'life-index-gui-fixture',
-      version: '0.3.0',
+      version: '0.5.0',
       type: 'module',
-      scripts: {
-        build: 'tsc -b && vite build',
-        lint: 'eslint .',
-        test: 'vitest',
-        'verify-stack': 'node scripts/fixture-verify-stack.mjs',
-      },
       devDependencies,
     }, null, 2)}\n`,
   );
-  mkdirSync(join(root, 'scripts'), { recursive: true });
+  writeFileSync(join(root, 'package-lock.json'), `${JSON.stringify({ lockfileVersion: 3 })}\n`);
+  mkdirSync(join(root, 'backend', 'adapter'), { recursive: true });
   writeFileSync(
-    join(root, 'scripts', 'fixture-verify-stack.mjs'),
-    "console.log(JSON.stringify({ status: 'ok', source: 'fixture verify-stack' }));\n",
+    join(root, 'backend', 'adapter', 'cli_adapter.py'),
+    'MIN_SUPPORTED_CLI_VERSION = "1.4.5"\n',
   );
-  writeFileSync(
-    join(root, 'package-lock.json'),
-    `${JSON.stringify({
-      name: 'life-index-gui-fixture',
-      version: '0.3.0',
-      lockfileVersion: 3,
-      packages: {
-        '': {
-          name: 'life-index-gui-fixture',
-          version: '0.3.0',
-          devDependencies,
-        },
-      },
-    }, null, 2)}\n`,
-  );
+  if (backendRequirements) {
+    writeFileSync(join(root, 'backend', 'requirements.txt'), 'fastapi\nuvicorn\npydantic\nPillow\n');
+  }
   if (installDevDeps) installFixtureDevDeps(root);
-  if (backendRequirements) writeBackendRequirementsFixture(root);
-  writeFixtureCli(root);
-  writeFixtureNpm(root);
+  writeFixtureExecutables(root);
 }
 
-function commitFile(cwd, path, content, message) {
-  writeFileSync(join(cwd, path), content);
-  git(cwd, ['add', path]);
-  git(cwd, ['commit', '-m', message]);
-  return git(cwd, ['rev-parse', 'HEAD']);
-}
-
-function makeRemoteFixture({ installDevDeps = true, backendRequirements = false } = {}) {
-  const base = mkdtempSync(join(tmpdir(), 'life-index-gui-upgrade-atom-'));
+function makeRemoteFixture(options = {}) {
+  const base = mkdtempSync(join(tmpdir(), 'life-index-gui-reinstall-'));
   const remote = join(base, 'origin.git');
   const work = join(base, 'work');
   const peer = join(base, 'peer');
-
   git(base, ['init', '--bare', remote]);
   mkdirSync(work);
   git(work, ['init', '-b', 'master']);
   configureGitUser(work);
-  writePackageFixture(work, { installDevDeps, backendRequirements });
-  git(work, ['add', '.gitignore', 'package.json', 'package-lock.json', 'scripts/fixture-verify-stack.mjs']);
-  if (backendRequirements) git(work, ['add', 'backend/requirements.txt']);
+  writePackageFixture(work, options);
+  git(work, ['add', '.gitignore', 'package.json', 'package-lock.json', 'backend/adapter/cli_adapter.py']);
+  if (options.backendRequirements) git(work, ['add', 'backend/requirements.txt']);
   git(work, ['commit', '-m', 'fixture']);
   git(work, ['remote', 'add', 'origin', remote]);
   git(work, ['push', '-u', 'origin', 'master']);
   git(base, ['clone', remote, peer]);
   configureGitUser(peer);
-
   return { base, remote, work, peer };
 }
 
-function makeLocalFixture({ installDevDeps = true, backendRequirements = false } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'life-index-gui-upgrade-local-'));
+function makeLocalFixture(options = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'life-index-gui-reinstall-local-'));
   git(root, ['init', '-b', 'master']);
   configureGitUser(root);
-  writePackageFixture(root, { installDevDeps, backendRequirements });
-  git(root, ['add', '.gitignore', 'package.json', 'package-lock.json', 'scripts/fixture-verify-stack.mjs']);
-  if (backendRequirements) git(root, ['add', 'backend/requirements.txt']);
+  writePackageFixture(root, options);
+  git(root, ['add', '.gitignore', 'package.json', 'package-lock.json', 'backend/adapter/cli_adapter.py']);
+  if (options.backendRequirements) git(root, ['add', 'backend/requirements.txt']);
   git(root, ['commit', '-m', 'fixture']);
   return root;
 }
 
-function addRemoteCommit(fixture, path = 'remote-note.md') {
+function addRemoteCommit(fixture, path = 'remote-update.md') {
   writeFileSync(join(fixture.peer, path), `remote update ${Date.now()}\n`);
   git(fixture.peer, ['add', path]);
   git(fixture.peer, ['commit', '-m', `remote update ${path}`]);
@@ -386,1603 +201,270 @@ function addRemoteCommit(fixture, path = 'remote-note.md') {
   return git(fixture.peer, ['rev-parse', 'HEAD']);
 }
 
-function plan(cwd) {
-  const result = runGuiUpgrade(['--plan', '--json'], { cwd });
-  assert.equal(result.stderr, '', `plan stderr must stay empty: ${result.stderr}`);
-  return { result, json: parseStdoutJson(result) };
+function addLocalCommit(fixture, path = 'local-update.md') {
+  writeFileSync(join(fixture.work, path), `local update ${Date.now()}\n`);
+  git(fixture.work, ['add', path]);
+  git(fixture.work, ['commit', '-m', `local update ${path}`]);
+  return git(fixture.work, ['rev-parse', 'HEAD']);
 }
 
-function apply(cwd) {
-  const result = runGuiUpgrade(['--apply', '--json'], { cwd });
-  assert.equal(result.stderr, '', `apply stderr must stay empty: ${result.stderr}`);
-  return { result, json: parseStdoutJson(result) };
+function plan(fixture, runnerOptions = {}, options = {}) {
+  const invoked = [];
+  const envelope = planGuiUpgrade({
+    repoRoot: fixture.work ?? fixture,
+    env: { PYTHON: 'python-fixture', ...(options.env ?? {}) },
+    commandRunner: makeCommandRunner({ invoked, ...runnerOptions }),
+  });
+  return { envelope, invoked };
+}
+
+function apply(fixture, runnerOptions = {}, options = {}) {
+  const invoked = [];
+  const envelope = applyGuiUpgrade({
+    repoRoot: fixture.work ?? fixture,
+    env: { PYTHON: 'python-fixture', ...(options.env ?? {}) },
+    commandRunner: makeCommandRunner({ invoked, ...runnerOptions }),
+  });
+  return { envelope, invoked };
 }
 
 function assertActionContract(action) {
   for (const field of ['id', 'description', 'side_effect', 'command', 'reason', 'safe_to_run', 'requires_human']) {
     assert.ok(Object.hasOwn(action, field), `action ${action.id ?? '<unknown>'} must include ${field}`);
   }
-  assert.ok(['read', 'write'].includes(action.side_effect), 'side_effect must be read or write');
-  assert.equal(typeof action.safe_to_run, 'boolean');
-  assert.equal(typeof action.requires_human, 'boolean');
 }
 
-function assertActionContracts(envelope) {
-  for (const action of envelope.data.actions) assertActionContract(action);
+function assertReinstallPlan(envelope, expectedReason) {
+  assert.equal(envelope.success, true);
+  assert.equal(envelope.schema_version, 'gui.upgrade.v0');
+  assert.equal(envelope.mode, 'plan');
+  assert.equal(envelope.data.reinstall_required, true);
+  assert.equal(envelope.data.reinstall_playbook, playbookPath);
+  assert.equal(envelope.data.actions.length, 1, 'replacement reasons must deduplicate to one action');
+  const [action] = envelope.data.actions;
+  assertActionContract(action);
+  assert.equal(action.id, 'reinstall_gui');
+  assert.equal(action.command, null);
+  assert.equal(action.side_effect, 'write');
+  assert.equal(action.safe_to_run, false);
+  assert.equal(action.requires_human, true);
+  assert.match(action.reason, expectedReason);
+  assert.match(action.description, /leave .*existing GUI checkout.*untouched/i);
+  assert.match(action.description, /fresh dedicated install/i);
+  assert.equal(envelope.data.recommended_next_step, action);
+  assert.doesNotMatch(JSON.stringify(envelope), forbiddenMutation);
 }
 
-function assertNoForbiddenCommands(envelope) {
-  const rendered = JSON.stringify(envelope);
-  assert.doesNotMatch(rendered, /public:(export|precheck|drift)|public sync|tag|release/i);
-  assert.doesNotMatch(rendered, /life-index\s+upgrade\s+--apply/i);
+function assertReinstallApply(envelope) {
+  assert.equal(envelope.success, false);
+  assert.equal(envelope.schema_version, 'gui.upgrade.v0');
+  assert.equal(envelope.mode, 'apply');
+  assert.equal(envelope.error.code, 'GUI_UPGRADE_REINSTALL_REQUIRED');
+  assert.equal(envelope.data.reinstall_required, true);
+  assert.equal(envelope.data.reinstall_playbook, playbookPath);
+  assert.deepEqual(envelope.data.applied_actions, []);
 }
 
-function assertGitRepoContract(repo) {
-  for (const field of [
-    'path',
-    'branch',
-    'head',
-    'upstream',
-    'dirty',
-    'dirty_files',
-    'ahead',
-    'behind',
-    'diverged',
-    'freshness',
-    'remote_probe',
-  ]) {
-    assert.ok(Object.hasOwn(repo, field), `repo must include ${field}`);
-  }
-  assert.ok(['current', 'dirty', 'ahead', 'behind', 'diverged', 'unknown'].includes(repo.freshness));
-  assert.ok(Object.hasOwn(repo.remote_probe, 'status'), 'remote_probe must include status');
+function assertNoForbiddenInvocations(invoked) {
+  assert.doesNotMatch(invoked.join('\n'), forbiddenMutation);
 }
 
-function assertNodeContract(node) {
-  for (const field of [
-    'node_version',
-    'npm_version',
-    'node_env',
-    'npm_omit',
-    'required_dev_dependencies',
-    'missing_dev_dependencies',
-    'dev_dependencies_present',
-    'package_lock_present',
-    'install_command',
-  ]) {
-    assert.ok(Object.hasOwn(node, field), `node must include ${field}`);
-  }
-  assert.ok(node.node_version.startsWith('v'), 'node_version should use process.version shape');
-  assert.ok(Array.isArray(node.npm_omit), 'npm_omit must be an array');
-  assert.deepEqual(node.required_dev_dependencies, requiredDevDeps);
-  assert.equal(node.install_command, 'npm ci --include=dev');
-}
-
-function assertPythonContract(python) {
-  for (const field of [
-    'command',
-    'version',
-    'supported_range',
-    'supported',
-    'backend_requirements_present',
-    'missing_backend_modules',
-    'requirements_file',
-    'install_command',
-  ]) {
-    assert.ok(Object.hasOwn(python, field), `python must include ${field}`);
-  }
-  assert.equal(python.supported_range, '3.11-3.13');
-  assert.ok(Array.isArray(python.missing_backend_modules), 'missing_backend_modules must be an array');
-}
-
-function assertCliDependencyContract(cliDependency) {
-  for (const field of [
-    'checked',
-    'status',
-    'cli_package_version',
-    'cli_minimum_version',
-    'compatible',
-    'feature_gates',
-    'version_command',
-  ]) {
-    assert.ok(Object.hasOwn(cliDependency, field), `cli_dependency must include ${field}`);
-  }
-  assert.ok(['ok', 'missing', 'incompatible', 'unknown'].includes(cliDependency.status));
-  assert.equal(typeof cliDependency.checked, 'boolean');
-  assert.equal(cliDependency.cli_minimum_version, cliMinimumVersion);
-  assert.equal(typeof cliDependency.compatible, 'boolean');
-  assert.ok(Array.isArray(cliDependency.feature_gates), 'feature_gates must be an array');
-  const reviewGate = cliDependency.feature_gates.find((gate) => gate.id === 'entity_review_cards');
-  assert.ok(reviewGate, 'cli_dependency must include entity_review_cards feature gate');
-  for (const field of ['id', 'required_cli', 'satisfied', 'reason']) {
-    assert.ok(Object.hasOwn(reviewGate, field), `entity_review_cards gate must include ${field}`);
-  }
-  assert.equal(reviewGate.required_cli, entityReviewCardsCliVersion);
-  assert.equal(typeof reviewGate.satisfied, 'boolean');
-  assert.equal(cliDependency.version_command, 'life-index --version');
-}
-
-function assertVerificationContract(verification) {
-  assert.ok(verification, 'plan data must include verification');
-  for (const field of [
-    'verify_stack_command',
-    'required',
-    'verified',
-    'last_result',
-  ]) {
-    assert.ok(Object.hasOwn(verification, field), `verification must include ${field}`);
-  }
-  assert.equal(verification.verify_stack_command, 'npm run verify-stack');
-  assert.equal(verification.required, true);
-  assert.equal(typeof verification.verified, 'boolean');
-  if (verification.last_result !== null) {
-    assert.equal(typeof verification.last_result.ok, 'boolean');
-    assert.ok(Object.hasOwn(verification.last_result, 'stdout'), 'last_result must include stdout');
-    assert.ok(Object.hasOwn(verification.last_result, 'stderr'), 'last_result must include stderr');
-  }
-}
-
-function assertSkillDeliveryContract(skillDelivery) {
-  assert.ok(skillDelivery, 'plan data must include skill_delivery');
-  for (const field of [
-    'skill_name',
-    'sync_command',
-    'delivered',
-    'last_result',
-  ]) {
-    assert.ok(Object.hasOwn(skillDelivery, field), `skill_delivery must include ${field}`);
-  }
-  assert.equal(skillDelivery.skill_name, 'life-index-gui');
-  assert.equal(skillDelivery.sync_command, 'npm run sync-skill');
-  assert.equal(typeof skillDelivery.delivered, 'boolean');
-  if (skillDelivery.last_result !== null) {
-    assert.equal(typeof skillDelivery.last_result.ok, 'boolean');
-    assert.ok(Object.hasOwn(skillDelivery.last_result, 'stdout'), 'last_result must include stdout');
-    assert.ok(Object.hasOwn(skillDelivery.last_result, 'stderr'), 'last_result must include stderr');
-  }
-}
-
-function assertBlockedApply(cwd, expectedActionId) {
-  const applyResult = apply(cwd);
-  assert.equal(applyResult.result.status, 1);
-  assert.equal(applyResult.json.success, false);
-  assert.equal(applyResult.json.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-  assert.deepEqual(applyResult.json.data.applied_actions, []);
-  assert.ok(applyResult.json.error.action_ids.includes(expectedActionId));
-  assertNoForbiddenCommands(applyResult.json);
-}
-
-const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
-assert.equal(packageJson.scripts['sync-skill'], 'node scripts/sync-skill.mjs');
-assert.equal(packageJson.scripts['gui-upgrade:plan'], 'node scripts/gui-upgrade.mjs --plan --json');
-assert.equal(packageJson.scripts['gui-upgrade:apply'], 'node scripts/gui-upgrade.mjs --apply --json');
-assert.match(
-  readFileSync(join(repoRoot, '.npmrc'), 'utf8'),
-  /^loglevel=silent$/m,
-  'npm-run GUI upgrade JSON entrypoints must not print lifecycle banners to stdout',
-);
-
+// Healthy/current is a truthful no-op in both modes.
 {
   const fixture = makeRemoteFixture();
   try {
-    const { result, json: currentPlan } = plan(fixture.work);
-    assert.equal(result.status, 0);
-    assert.equal(currentPlan.success, true);
-    assert.equal(currentPlan.schema_version, 'gui.upgrade.v0');
-    assert.equal(currentPlan.command, 'gui-upgrade');
-    assert.equal(currentPlan.mode, 'plan');
-    assertGitRepoContract(currentPlan.data.repo);
-    assert.equal(currentPlan.data.repo.branch, 'master');
-    assert.equal(currentPlan.data.repo.upstream, 'origin/master');
-    assert.equal(currentPlan.data.repo.dirty, false);
-    assert.deepEqual(currentPlan.data.repo.dirty_files, []);
-    assert.equal(currentPlan.data.repo.ahead, 0);
-    assert.equal(currentPlan.data.repo.behind, 0);
-    assert.equal(currentPlan.data.repo.diverged, false);
-    assert.equal(currentPlan.data.repo.freshness, 'current');
-    assert.equal(currentPlan.data.repo.remote_probe.status, 'ok');
-    assert.equal(currentPlan.data.repo.remote_probe.remote_head, currentPlan.data.repo.head);
-    assertNodeContract(currentPlan.data.node);
-    assert.equal(currentPlan.data.node.node_env, null);
-    assert.deepEqual(currentPlan.data.node.npm_omit, []);
-    assert.equal(currentPlan.data.node.package_lock_present, true);
-    assert.equal(currentPlan.data.node.dev_dependencies_present, true);
-    assert.deepEqual(currentPlan.data.node.missing_dev_dependencies, []);
-    assertCliDependencyContract(currentPlan.data.cli_dependency);
-    assert.equal(currentPlan.data.cli_dependency.checked, true);
-    assert.equal(currentPlan.data.cli_dependency.status, 'ok');
-    assert.equal(currentPlan.data.cli_dependency.cli_package_version, '1.4.5');
-    assert.equal(currentPlan.data.cli_dependency.compatible, true);
-    assert.equal(
-      currentPlan.data.cli_dependency.feature_gates.find((gate) => gate.id === 'entity_review_cards').satisfied,
-      true,
+    const planned = plan(fixture);
+    assert.equal(planned.envelope.success, true);
+    assert.equal(planned.envelope.data.repo.freshness, 'current');
+    assert.equal(planned.envelope.data.reinstall_required, false);
+    assert.deepEqual(planned.envelope.data.actions, []);
+    assert.equal(planned.envelope.data.recommended_next_step.id, 'none');
+    assert.deepEqual(
+      planned.invoked.filter((command) => command.startsWith('git ') && command.includes(' status ')),
+      ['git --no-optional-locks status --porcelain=v1'],
     );
-    assertVerificationContract(currentPlan.data.verification);
-    assert.equal(currentPlan.data.verification.verified, false);
-    assert.equal(currentPlan.data.verification.last_result, null);
-    assertSkillDeliveryContract(currentPlan.data.skill_delivery);
-    assert.equal(currentPlan.data.skill_delivery.delivered, false);
-    assert.equal(currentPlan.data.skill_delivery.last_result, null);
-    assert.equal(currentPlan.data.actions.some((action) => action.id === 'sync_skill'), true);
-    assert.equal(currentPlan.data.recommended_next_step.id, 'verify_stack');
-    assert.equal(currentPlan.data.recommended_next_step.command, 'npm run verify-stack');
-    assert.equal(currentPlan.data.recommended_next_step.side_effect, 'write');
-    assert.equal(currentPlan.data.recommended_next_step.safe_to_run, true);
-    assert.equal(currentPlan.data.recommended_next_step.requires_human, false);
-    assertActionContracts(currentPlan);
-    assertNoForbiddenCommands(currentPlan);
+    assertNoForbiddenInvocations(planned.invoked);
 
-    const applyResult = apply(fixture.work);
-    assert.equal(applyResult.result.status, 0);
-    assert.equal(applyResult.json.success, true);
-    assert.equal(applyResult.json.mode, 'apply');
-    assert.deepEqual(applyResult.json.data.applied_actions, [
-      { id: 'verify_stack', command: 'npm run verify-stack' },
-      { id: 'sync_skill', command: 'npm run sync-skill' },
-    ]);
-    assertVerificationContract(applyResult.json.data.verification);
-    assert.equal(applyResult.json.data.verification.verified, true);
-    assert.equal(applyResult.json.data.verification.last_result.ok, true);
-    assert.match(applyResult.json.data.verification.last_result.stdout, /fixture verify-stack/);
-    assertSkillDeliveryContract(applyResult.json.data.skill_delivery);
-    assert.equal(applyResult.json.data.skill_delivery.delivered, true);
-    assert.equal(applyResult.json.data.skill_delivery.last_result.ok, true);
-    assert.match(applyResult.json.data.skill_delivery.last_result.stdout, /life-index-gui/);
-    assert.equal(applyResult.json.data.recommended_next_step.id, 'none');
-    assertNoForbiddenCommands(applyResult.json);
+    const applied = apply(fixture);
+    assert.equal(applied.envelope.success, true);
+    assert.equal(applied.envelope.mode, 'apply');
+    assert.equal(applied.envelope.data.reinstall_required, false);
+    assert.deepEqual(applied.envelope.data.actions, []);
+    assert.deepEqual(applied.envelope.data.applied_actions, []);
+    assertNoForbiddenInvocations(applied.invoked);
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
   }
 }
 
-for (const plainTextVersion of ['life-index 1.4.5x', 'life-index 1.5', 'life-index 1.4.5-rc.1']) {
+// Behind and stale-tracking checkouts require a fresh dedicated install, never fetch/pull.
+for (const staleTracking of [false, true]) {
   const fixture = makeRemoteFixture();
   try {
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner: makeCliCommandRunner({ stdout: `${plainTextVersion}\n` }),
-    });
-    assertCliDependencyContract(planResult.data.cli_dependency);
-    assert.equal(planResult.data.cli_dependency.status, 'unknown');
-    assert.equal(planResult.data.cli_dependency.compatible, false);
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.match(planResult.data.recommended_next_step.reason, /could not be parsed/);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    writeFileSync(join(fixture.work, 'dirty-verify-blocker.md'), 'dirty blocks verify-stack\n');
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      const id = gitCommandId(command, args);
-      invoked.push(id);
-      return runGitForInjection(command, args, context);
-    };
-    const planResult = planGuiUpgrade({ repoRoot: fixture.work, commandRunner });
-    assert.equal(planResult.data.repo.freshness, 'dirty');
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_dirty_worktree');
-    assert.equal(planResult.data.actions.some((action) => action.id === 'verify_stack'), false);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({ repoRoot: fixture.work, commandRunner });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('resolve_dirty_worktree'));
-    assert.equal(invoked.includes('npm run verify-stack'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      const id = gitCommandId(command, args);
-      invoked.push(id);
-      return runGitForInjection(command, args, context);
-    };
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { NODE_ENV: 'production' },
-      commandRunner,
-    });
-    assert.equal(planResult.data.recommended_next_step.id, 'clear_node_env_production');
-    assert.equal(planResult.data.actions.some((action) => action.id === 'verify_stack'), false);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { NODE_ENV: 'production' },
-      commandRunner,
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('clear_node_env_production'));
-    assert.equal(invoked.includes('npm run verify-stack'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm run sync-skill') {
-          return {
-            status: 1,
-            stdout: `${JSON.stringify({ delivered: false, reason: 'host_skill_directory_not_found' })}\n`,
-            stderr: '',
-            message: 'simulated sync-skill failure',
-          };
-        }
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.mode, 'apply');
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_SYNC_SKILL_FAILED');
-    assert.match(applyResult.data.skill_error.stdout, /host_skill_directory_not_found/);
-    assert.match(applyResult.data.skill_error.message, /simulated sync-skill failure/);
-    assert.equal(invoked.includes('npm run verify-stack'), true);
-    assert.equal(invoked.includes('npm run sync-skill'), true);
-    assert.deepEqual(applyResult.data.applied_actions, [
-      { id: 'verify_stack', command: 'npm run verify-stack' },
-    ]);
-    assertSkillDeliveryContract(applyResult.data.skill_delivery);
-    assert.equal(applyResult.data.skill_delivery.delivered, false);
-    assert.equal(applyResult.data.skill_delivery.last_result.ok, false);
-    assert.match(applyResult.data.skill_delivery.last_result.stdout, /host_skill_directory_not_found/);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      const id = gitCommandId(command, args);
-      invoked.push(id);
-      return makeCliCommandRunner({ version: '1.4.3' })(command, args, context);
-    };
-    const planResult = planGuiUpgrade({ repoRoot: fixture.work, commandRunner });
-    assert.equal(planResult.data.cli_dependency.status, 'incompatible');
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.equal(planResult.data.actions.some((action) => action.id === 'verify_stack'), false);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({ repoRoot: fixture.work, commandRunner });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('resolve_cli_dependency'));
-    assert.equal(invoked.includes('npm run verify-stack'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm run verify-stack') {
-          return {
-            status: 1,
-            stdout: 'verify stdout\n',
-            stderr: 'verify failed\n',
-            message: 'simulated verify-stack failure',
-          };
-        }
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.mode, 'apply');
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_VERIFY_STACK_FAILED');
-    assert.match(applyResult.data.verify_error.stdout, /verify stdout/);
-    assert.match(applyResult.data.verify_error.stderr, /verify failed/);
-    assert.match(applyResult.data.verify_error.message, /simulated verify-stack failure/);
-    assert.equal(invoked.includes('npm run verify-stack'), true);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertVerificationContract(applyResult.data.verification);
-    assert.equal(applyResult.data.verification.verified, false);
-    assert.equal(applyResult.data.verification.last_result.ok, false);
-    assert.match(applyResult.data.verification.last_result.stdout, /verify stdout/);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      invoked.push(gitCommandId(command, args));
-      return makeCliCommandRunner({ missing: true })(command, args, context);
-    };
-    const planResult = planGuiUpgrade({ repoRoot: fixture.work, commandRunner });
-    assertCliDependencyContract(planResult.data.cli_dependency);
-    assert.equal(planResult.data.cli_dependency.checked, true);
-    assert.equal(planResult.data.cli_dependency.status, 'missing');
-    assert.equal(planResult.data.cli_dependency.cli_package_version, null);
-    assert.equal(planResult.data.cli_dependency.compatible, false);
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.equal(planResult.data.recommended_next_step.safe_to_run, false);
-    assert.equal(planResult.data.recommended_next_step.requires_human, true);
-    assert.equal(planResult.data.recommended_next_step.command, 'life-index --version');
-    assert.match(planResult.data.recommended_next_step.suggested_manual_resolution.posix, /life-index upgrade --plan --json/);
-    assert.match(planResult.data.recommended_next_step.suggested_manual_resolution.powershell, /life-index upgrade --plan --json/);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({ repoRoot: fixture.work, commandRunner });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('resolve_cli_dependency'));
-    assert.equal(applyResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.equal(invoked.includes('life-index upgrade --apply'), false);
-    assert.equal(invoked.some((id) => /pip .*life-index/i.test(id)), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner: makeCliCommandRunner({ version: '1.2.9' }),
-    });
-    assertCliDependencyContract(planResult.data.cli_dependency);
-    assert.equal(planResult.data.cli_dependency.status, 'incompatible');
-    assert.equal(planResult.data.cli_dependency.cli_package_version, '1.2.9');
-    assert.equal(planResult.data.cli_dependency.compatible, false);
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.match(planResult.data.recommended_next_step.reason, /minimum CLI 1\.4\.5/);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner: makeCliCommandRunner({ version: '1.4.3' }),
-    });
-    assertCliDependencyContract(planResult.data.cli_dependency);
-    assert.equal(planResult.data.cli_dependency.status, 'incompatible');
-    assert.equal(planResult.data.cli_dependency.cli_package_version, '1.4.3');
-    assert.equal(planResult.data.cli_dependency.compatible, false);
-    const reviewGate = planResult.data.cli_dependency.feature_gates.find((gate) => gate.id === 'entity_review_cards');
-    assert.equal(reviewGate.satisfied, false);
-    assert.match(reviewGate.reason, /requires CLI 1\.4\.5/);
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.match(planResult.data.recommended_next_step.reason, /minimum CLI 1\.4\.5/);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner: makeCliCommandRunner({ version: '1.4.4' }),
-    });
-    assertCliDependencyContract(planResult.data.cli_dependency);
-    assert.equal(planResult.data.cli_dependency.status, 'incompatible');
-    assert.equal(planResult.data.cli_dependency.cli_package_version, '1.4.4');
-    assert.equal(planResult.data.cli_dependency.compatible, false);
-    assert.equal(
-      planResult.data.cli_dependency.feature_gates.find((gate) => gate.id === 'entity_review_cards').satisfied,
-      false,
-    );
-    assertVerificationContract(planResult.data.verification);
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner: makeCliCommandRunner({ version: '1.4.4x' }),
-    });
-    assertCliDependencyContract(planResult.data.cli_dependency);
-    assert.equal(planResult.data.cli_dependency.status, 'unknown');
-    assert.equal(planResult.data.cli_dependency.cli_package_version, '1.4.4x');
-    assert.equal(planResult.data.cli_dependency.compatible, false);
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.match(planResult.data.recommended_next_step.reason, /could not be parsed/);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    writeFileSync(join(fixture.work, 'dirty-bad-cli.md'), 'git blocker wins before CLI dependency\n');
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner: makeCliCommandRunner({ version: '1.2.9' }),
-    });
-    assert.equal(planResult.data.repo.freshness, 'dirty');
-    assert.equal(planResult.data.cli_dependency.status, 'incompatible');
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_dirty_worktree');
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ backendRequirements: true });
-  try {
-    const invoked = [];
-    const backendRunner = makeBackendCommandRunner({ missingModules: ['fastapi'] });
-    const commandRunner = (command, args, context) => {
-      invoked.push(gitCommandId(command, args));
-      return makeCliCommandRunner({
-        version: '1.4.3',
-        fallback: backendRunner,
-      })(command, args, context);
-    };
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assert.equal(planResult.data.python.backend_requirements_present, false);
-    assert.equal(planResult.data.cli_dependency.status, 'incompatible');
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_cli_dependency');
-    assert.equal(planResult.data.actions.some((action) => action.id === 'pip_install_backend_requirements'), true);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('resolve_cli_dependency'));
-    assert.equal(invoked.includes('python-fixture -m pip install -r backend/requirements.txt'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ backendRequirements: true });
-  try {
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner: makeBackendCommandRunner(),
-    });
-    assert.equal(planResult.success, true);
-    assert.equal(planResult.data.repo.freshness, 'current');
-    assertPythonContract(planResult.data.python);
-    assert.equal(planResult.data.python.command, 'python-fixture');
-    assert.equal(planResult.data.python.version, '3.13.5');
-    assert.equal(planResult.data.python.supported, true);
-    assert.equal(planResult.data.python.backend_requirements_present, true);
-    assert.deepEqual(planResult.data.python.missing_backend_modules, []);
-    assert.match(planResult.data.python.requirements_file, /backend[\\/]+requirements\.txt$/);
-    assert.equal(planResult.data.python.install_command, 'python-fixture -m pip install -r backend/requirements.txt');
-    assertVerificationContract(planResult.data.verification);
-    assert.equal(planResult.data.recommended_next_step.id, 'verify_stack');
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ backendRequirements: true });
-  try {
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      invoked.push(gitCommandId(command, args));
-      return makeBackendCommandRunner({ version: '3.14.0' })(command, args, context);
-    };
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assert.equal(planResult.data.python.supported, false);
-    assert.equal(planResult.data.python.version, '3.14.0');
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_backend_python_version');
-    assert.equal(planResult.data.recommended_next_step.safe_to_run, false);
-    assert.equal(planResult.data.recommended_next_step.requires_human, true);
-    assert.match(planResult.data.recommended_next_step.suggested_manual_resolution.posix, /python3\.13 -m venv \.venv/);
-    assert.match(planResult.data.recommended_next_step.suggested_manual_resolution.powershell, /py -3\.13 -m venv \.venv/);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('resolve_backend_python_version'));
-    assert.equal(applyResult.data.recommended_next_step.id, 'resolve_backend_python_version');
-    assert.equal(invoked.includes('python-fixture -m pip install -r backend/requirements.txt'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ backendRequirements: true });
-  try {
-    let missingModules = ['fastapi', 'PIL'];
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      invoked.push(gitCommandId(command, args));
-      return makeBackendCommandRunner({
-        missingModules,
-        onPipInstall() {
-          missingModules = [];
-          return { status: 0, stdout: 'installed backend deps\n', stderr: '' };
-        },
-      })(command, args, context);
-    };
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assertPythonContract(planResult.data.python);
-    assert.equal(planResult.data.python.supported, true);
-    assert.equal(planResult.data.python.backend_requirements_present, false);
-    assert.deepEqual(planResult.data.python.missing_backend_modules, ['fastapi', 'PIL']);
-    assert.equal(planResult.data.recommended_next_step.id, 'pip_install_backend_requirements');
-    assert.equal(planResult.data.recommended_next_step.command, 'python-fixture -m pip install -r backend/requirements.txt');
-    assert.equal(planResult.data.recommended_next_step.side_effect, 'write');
-    assert.equal(planResult.data.recommended_next_step.safe_to_run, true);
-    assert.equal(planResult.data.recommended_next_step.requires_human, false);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assert.equal(applyResult.success, true);
-    assert.ok(invoked.includes('python-fixture -m pip install -r backend/requirements.txt'));
-    assert.ok(invoked.indexOf('npm run verify-stack') > invoked.indexOf('python-fixture -m pip install -r backend/requirements.txt'));
-    assert.deepEqual(applyResult.data.applied_actions, [
-      { id: 'pip_install_backend_requirements', command: 'python-fixture -m pip install -r backend/requirements.txt' },
-      { id: 'verify_stack', command: 'npm run verify-stack' },
-      { id: 'sync_skill', command: 'npm run sync-skill' },
-    ]);
-    assert.equal(applyResult.data.python.backend_requirements_present, true);
-    assert.deepEqual(applyResult.data.python.missing_backend_modules, []);
-    assert.equal(applyResult.data.recommended_next_step.id, 'none');
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ backendRequirements: true });
-  try {
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      invoked.push(gitCommandId(command, args));
-      return makeBackendCommandRunner({
-        missingModules: ['uvicorn'],
-        onPipInstall() {
-          return {
-            status: 1,
-            stdout: 'pip stdout\n',
-            stderr: 'pip failed\n',
-            message: 'simulated pip failure',
-          };
-        },
-      })(command, args, context);
-    };
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_PIP_INSTALL_FAILED');
-    assert.match(applyResult.data.pip_error.stdout, /pip stdout/);
-    assert.match(applyResult.data.pip_error.stderr, /pip failed/);
-    assert.match(applyResult.data.pip_error.message, /simulated pip failure/);
-    assert.equal(invoked.includes('python-fixture -m pip install -r backend/requirements.txt'), true);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ backendRequirements: true });
-  try {
-    const remoteHead = addRemoteCommit(fixture, 'behind-missing-backend-deps.md');
-    git(fixture.work, ['fetch', 'origin']);
-    let missingModules = ['pydantic_core'];
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      invoked.push(gitCommandId(command, args));
-      return makeBackendCommandRunner({
-        missingModules,
-        onPipInstall() {
-          missingModules = [];
-          return { status: 0, stdout: 'installed after git\n', stderr: '' };
-        },
-      })(command, args, context);
-    };
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-
-    assert.equal(applyResult.success, true);
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), remoteHead);
-    assert.ok(invoked.indexOf('git pull --ff-only') > -1);
-    assert.ok(invoked.indexOf('python-fixture -m pip install -r backend/requirements.txt') > invoked.indexOf('git pull --ff-only'));
-    assert.ok(invoked.indexOf('npm run verify-stack') > invoked.indexOf('python-fixture -m pip install -r backend/requirements.txt'));
-    assert.deepEqual(applyResult.data.applied_actions, [
-      { id: 'git_pull_ff_only', command: 'git pull --ff-only' },
-      { id: 'pip_install_backend_requirements', command: 'python-fixture -m pip install -r backend/requirements.txt' },
-      { id: 'verify_stack', command: 'npm run verify-stack' },
-      { id: 'sync_skill', command: 'npm run sync-skill' },
-    ]);
-    assert.equal(applyResult.data.python.backend_requirements_present, true);
-    assert.equal(applyResult.data.recommended_next_step.id, 'none');
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ backendRequirements: true });
-  try {
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      invoked.push(gitCommandId(command, args));
-      return makeBackendCommandRunner({ missingModules: ['fastapi'] })(command, args, context);
-    };
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture', NODE_ENV: 'production' },
-      commandRunner,
-    });
-    assert.equal(planResult.data.recommended_next_step.id, 'clear_node_env_production');
-    assert.equal(planResult.data.actions.some((action) => action.id === 'pip_install_backend_requirements'), true);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture', NODE_ENV: 'production' },
-      commandRunner,
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('clear_node_env_production'));
-    assert.equal(applyResult.data.recommended_next_step.id, 'clear_node_env_production');
-    assert.equal(invoked.includes('python-fixture -m pip install -r backend/requirements.txt'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ backendRequirements: true });
-  try {
-    const invoked = [];
-    const commandRunner = (command, args, context) => {
-      invoked.push(gitCommandId(command, args));
-      return makeBackendCommandRunner({ version: '3.14.1', missingModules: ['fastapi'] })(command, args, context);
-    };
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assert.equal(planResult.data.recommended_next_step.id, 'resolve_backend_python_version');
-    assert.equal(planResult.data.actions.some((action) => action.id === 'pip_install_backend_requirements'), false);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { PYTHON: 'python-fixture' },
-      commandRunner,
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('resolve_backend_python_version'));
-    assert.equal(invoked.includes('python-fixture -m pip install -r backend/requirements.txt'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    const { result, json: missingPlan } = plan(fixture.work);
-    assert.equal(result.status, 0);
-    assertGitRepoContract(missingPlan.data.repo);
-    assertNodeContract(missingPlan.data.node);
-    assert.equal(missingPlan.data.repo.freshness, 'current');
-    assert.equal(missingPlan.data.node.dev_dependencies_present, false);
-    assert.deepEqual(missingPlan.data.node.missing_dev_dependencies, requiredDevDeps);
-    assert.equal(missingPlan.data.recommended_next_step.id, 'npm_ci_include_dev');
-    assert.equal(missingPlan.data.recommended_next_step.command, 'npm ci --include=dev');
-    assert.equal(missingPlan.data.recommended_next_step.side_effect, 'write');
-    assert.equal(missingPlan.data.recommended_next_step.safe_to_run, true);
-    assert.equal(missingPlan.data.recommended_next_step.requires_human, false);
-    assertActionContracts(missingPlan);
-    assertNoForbiddenCommands(missingPlan);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    const remoteHead = addRemoteCommit(fixture, 'behind-missing-devdeps.md');
-    git(fixture.work, ['fetch', 'origin']);
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        if (id === 'npm ci --include=dev') {
-          installFixtureDevDeps(fixture.work);
-          return { status: 0, stdout: 'installed after git\n', stderr: '' };
-        }
-        return runGitForInjection(command, args, context);
-      },
-    });
-
-    assert.equal(applyResult.success, true);
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), remoteHead);
-    assert.ok(invoked.indexOf('git pull --ff-only') > -1);
-    assert.ok(invoked.indexOf('npm ci --include=dev') > invoked.indexOf('git pull --ff-only'));
-    assert.ok(invoked.indexOf('npm run verify-stack') > invoked.indexOf('npm ci --include=dev'));
-    assert.deepEqual(applyResult.data.applied_actions, [
-      { id: 'git_pull_ff_only', command: 'git pull --ff-only' },
-      { id: 'npm_ci_include_dev', command: 'npm ci --include=dev' },
-      { id: 'verify_stack', command: 'npm run verify-stack' },
-      { id: 'sync_skill', command: 'npm run sync-skill' },
-    ]);
-    assert.equal(applyResult.data.node.dev_dependencies_present, true);
-    assert.equal(applyResult.data.recommended_next_step.id, 'none');
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    addRemoteCommit(fixture, 'behind-node-env-production.md');
-    git(fixture.work, ['fetch', 'origin']);
     const localHead = git(fixture.work, ['rev-parse', 'HEAD']);
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { ...process.env, NODE_ENV: 'production' },
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(planResult.data.repo.freshness, 'behind');
-    assert.equal(planResult.data.actions.some((action) => action.id === 'git_pull_ff_only'), true);
-    assert.equal(planResult.data.recommended_next_step.id, 'clear_node_env_production');
-    assert.equal(planResult.data.recommended_next_step.safe_to_run, false);
-    assert.equal(planResult.data.recommended_next_step.requires_human, true);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
+    addRemoteCommit(fixture, staleTracking ? 'stale.md' : 'behind.md');
+    if (!staleTracking) git(fixture.work, ['fetch', 'origin']);
+    const planned = plan(fixture);
+    assert.equal(planned.envelope.data.repo.freshness, 'behind');
+    assertReinstallPlan(planned.envelope, /behind|stale/i);
+    assertNoForbiddenInvocations(planned.invoked);
 
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { ...process.env, NODE_ENV: 'production' },
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('clear_node_env_production'));
-    assert.equal(applyResult.data.recommended_next_step.id, 'clear_node_env_production');
-    assert.equal(invoked.includes('git pull --ff-only'), false);
-    assert.equal(invoked.includes('npm ci --include=dev'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
+    const applied = apply(fixture);
+    assertReinstallApply(applied.envelope);
+    assertNoForbiddenInvocations(applied.invoked);
     assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), localHead);
-    assertNoForbiddenCommands(applyResult);
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
   }
 }
 
+// Missing Node dependencies require replacement; apply must not run npm ci.
+{
+  const fixture = makeRemoteFixture({ installDevDeps: false });
+  try {
+    const planned = plan(fixture);
+    assertReinstallPlan(planned.envelope, /missing.*dependencies|vite/i);
+    const applied = apply(fixture);
+    assertReinstallApply(applied.envelope);
+    assertNoForbiddenInvocations([...planned.invoked, ...applied.invoked]);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
+// Environment guards are replacement signals, not invitations to mutate npm or process configuration.
+for (const scenario of [
+  { runnerOptions: { npmOmit: 'dev' }, options: {}, reason: /npm omit/i },
+  { runnerOptions: {}, options: { env: { NODE_ENV: 'production' } }, reason: /NODE_ENV=production/i },
+]) {
+  const fixture = makeRemoteFixture();
+  try {
+    const planned = plan(fixture, scenario.runnerOptions, scenario.options);
+    assertReinstallPlan(planned.envelope, scenario.reason);
+    const applied = apply(fixture, scenario.runnerOptions, scenario.options);
+    assertReinstallApply(applied.envelope);
+    assertNoForbiddenInvocations([...planned.invoked, ...applied.invoked]);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
+// Missing backend modules and unsupported Python both require replacement; apply must not run pip/venv repair.
+for (const runnerOptions of [
+  { missingBackendModules: ['fastapi'] },
+  { pythonVersion: '3.10.14' },
+]) {
+  const fixture = makeRemoteFixture({ backendRequirements: true });
+  try {
+    const planned = plan(fixture, runnerOptions);
+    assertReinstallPlan(planned.envelope, /backend|python/i);
+    const applied = apply(fixture, runnerOptions);
+    assertReinstallApply(applied.envelope);
+    assertNoForbiddenInvocations([...planned.invoked, ...applied.invoked]);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
+// CLI dependency mismatch is part of the disposable GUI program-environment replacement decision.
+for (const runnerOptions of [
+  { cliVersion: '1.4.4' },
+  { cliStatus: 'missing' },
+  { cliStatus: 'unknown' },
+]) {
+  const fixture = makeRemoteFixture();
+  try {
+    const planned = plan(fixture, runnerOptions);
+    assertReinstallPlan(planned.envelope, /CLI/i);
+    const applied = apply(fixture, runnerOptions);
+    assertReinstallApply(applied.envelope);
+    assertNoForbiddenInvocations([...planned.invoked, ...applied.invoked]);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
+// Multiple replacement reasons remain one human-required action.
+{
+  const fixture = makeRemoteFixture({ installDevDeps: false, backendRequirements: true });
+  try {
+    addRemoteCommit(fixture, 'dedupe.md');
+    git(fixture.work, ['fetch', 'origin']);
+    const planned = plan(fixture, { missingBackendModules: ['fastapi'], cliVersion: '1.4.4' });
+    assertReinstallPlan(planned.envelope, /behind/i);
+    assert.match(planned.envelope.data.actions[0].reason, /Node/i);
+    assert.match(planned.envelope.data.actions[0].reason, /backend/i);
+    assert.match(planned.envelope.data.actions[0].reason, /CLI/i);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
+// Dirty/ahead/diverged/unknown remain human-owned diagnostics, not deletion or reinstall advice.
+for (const state of ['dirty', 'ahead', 'diverged', 'unknown']) {
+  const fixture = state === 'unknown' ? makeLocalFixture() : makeRemoteFixture();
+  const root = fixture.work ?? fixture;
+  const cleanup = fixture.base ?? fixture;
+  try {
+    if (state === 'dirty') writeFileSync(join(root, 'dirty.md'), 'keep this work\n');
+    if (state === 'ahead') addLocalCommit(fixture, 'ahead.md');
+    if (state === 'diverged') {
+      addLocalCommit(fixture, 'local.md');
+      addRemoteCommit(fixture, 'remote.md');
+      git(root, ['fetch', 'origin']);
+    }
+    const planned = plan(fixture);
+    assert.equal(planned.envelope.data.repo.freshness, state);
+    assert.equal(planned.envelope.data.reinstall_required, false);
+    assert.equal(planned.envelope.data.actions.length, 1);
+    assert.notEqual(planned.envelope.data.actions[0].id, 'reinstall_gui');
+    assert.equal(planned.envelope.data.actions[0].side_effect, 'read');
+    if (state !== 'unknown') {
+      assert.equal(planned.envelope.data.actions[0].command, 'git --no-optional-locks status --porcelain');
+    }
+    assert.equal(planned.envelope.data.actions[0].safe_to_run, false);
+    assert.equal(planned.envelope.data.actions[0].requires_human, true);
+    assert.doesNotMatch(JSON.stringify(planned.envelope), /discard|delete|reset|stash/i);
+    assert.doesNotMatch(JSON.stringify(planned.envelope), forbiddenMutation);
+
+    const applied = apply(fixture);
+    assert.equal(applied.envelope.success, false);
+    assert.equal(applied.envelope.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
+    assert.equal(applied.envelope.data.reinstall_required, false);
+    assert.deepEqual(applied.envelope.data.applied_actions, []);
+    assertNoForbiddenInvocations([...planned.invoked, ...applied.invoked]);
+  } finally {
+    rmSync(cleanup, { recursive: true, force: true });
+  }
+}
+
+// CLI wrapper preserves v0, JSON-only stdout, exit 1, and command:null on reinstall-required.
 {
   const fixture = makeRemoteFixture();
   try {
-    addRemoteCommit(fixture, 'behind-npm-omit-dev.md');
+    addRemoteCommit(fixture, 'wrapper-behind.md');
     git(fixture.work, ['fetch', 'origin']);
-    const localHead = git(fixture.work, ['rev-parse', 'HEAD']);
-    const planResult = planGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: 'dev\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(planResult.data.repo.freshness, 'behind');
-    assert.equal(planResult.data.actions.some((action) => action.id === 'git_pull_ff_only'), true);
-    assert.equal(planResult.data.recommended_next_step.id, 'restore_npm_omit_dev');
-    assert.equal(planResult.data.recommended_next_step.safe_to_run, false);
-    assert.equal(planResult.data.recommended_next_step.requires_human, true);
-    assertActionContracts(planResult);
-    assertNoForbiddenCommands(planResult);
-
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: 'dev\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('restore_npm_omit_dev'));
-    assert.equal(applyResult.data.recommended_next_step.id, 'restore_npm_omit_dev');
-    assert.equal(invoked.includes('git pull --ff-only'), false);
-    assert.equal(invoked.includes('npm ci --include=dev'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), localHead);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        if (id === 'npm ci --include=dev') {
-          installFixtureDevDeps(fixture.work);
-          return { status: 0, stdout: 'installed dev dependencies\n', stderr: '' };
-        }
-        return runGitForInjection(command, args, context);
-      },
-    });
-
-    assert.equal(applyResult.success, true);
-    assert.equal(applyResult.mode, 'apply');
-    assert.ok(invoked.includes('npm ci --include=dev'));
-    assert.ok(invoked.indexOf('npm run verify-stack') > invoked.indexOf('npm ci --include=dev'));
-    assert.deepEqual(applyResult.data.applied_actions, [
-      { id: 'npm_ci_include_dev', command: 'npm ci --include=dev' },
-      { id: 'verify_stack', command: 'npm run verify-stack' },
-      { id: 'sync_skill', command: 'npm run sync-skill' },
-    ]);
-    assert.equal(applyResult.data.node.dev_dependencies_present, true);
-    assert.deepEqual(applyResult.data.node.missing_dev_dependencies, []);
-    assert.equal(applyResult.data.recommended_next_step.id, 'none');
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        if (id === 'npm ci --include=dev') {
-          return {
-            status: 1,
-            stdout: 'npm ci stdout\n',
-            stderr: 'npm ci failed\n',
-            message: 'simulated npm ci failure',
-          };
-        }
-        return runGitForInjection(command, args, context);
-      },
-    });
-
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.mode, 'apply');
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_NPM_CI_FAILED');
-    assert.match(applyResult.data.npm_error.stdout, /npm ci stdout/);
-    assert.match(applyResult.data.npm_error.stderr, /npm ci failed/);
-    assert.match(applyResult.data.npm_error.message, /simulated npm ci failure/);
-    assert.equal(invoked.includes('npm ci --include=dev'), true);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    const planResult = runGuiUpgradeWithEnv(['--plan', '--json'], {
+    const fixtureBin = join(fixture.work, '.fixture-bin');
+    const result = spawnSync(process.execPath, [guiUpgradeScript, '--apply', '--json'], {
       cwd: fixture.work,
-      env: { NODE_ENV: 'production' },
-    });
-    assert.equal(planResult.stderr, '', `plan stderr must stay empty: ${planResult.stderr}`);
-    const productionPlan = parseStdoutJson(planResult);
-    assert.equal(productionPlan.success, true);
-    assertNodeContract(productionPlan.data.node);
-    assert.equal(productionPlan.data.node.node_env, 'production');
-    assert.equal(productionPlan.data.recommended_next_step.id, 'clear_node_env_production');
-    assert.equal(productionPlan.data.recommended_next_step.safe_to_run, false);
-    assert.equal(productionPlan.data.recommended_next_step.requires_human, true);
-    assert.match(productionPlan.data.recommended_next_step.suggested_manual_resolution.posix, /unset NODE_ENV/);
-    assert.match(productionPlan.data.recommended_next_step.suggested_manual_resolution.powershell, /\$env:NODE_ENV/);
-    assertActionContracts(productionPlan);
-    assertNoForbiddenCommands(productionPlan);
-
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      env: { ...process.env, NODE_ENV: 'production' },
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        return runGitForInjection(command, args, context);
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fixtureBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
       },
     });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('clear_node_env_production'));
-    assert.equal(invoked.includes('npm ci --include=dev'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, '');
+    assert.doesNotThrow(() => JSON.parse(result.stdout), `stdout must be JSON only: ${result.stdout}`);
+    const envelope = JSON.parse(result.stdout);
+    assertReinstallApply(envelope);
+    assert.equal(envelope.data.actions.length, 1);
+    assert.equal(envelope.data.actions[0].id, 'reinstall_gui');
+    assert.equal(envelope.data.actions[0].command, null);
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
   }
 }
 
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    const invoked = [];
-    const omitPlan = planGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: 'dev\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(omitPlan.success, true);
-    assertNodeContract(omitPlan.data.node);
-    assert.deepEqual(omitPlan.data.node.npm_omit, ['dev']);
-    assert.equal(omitPlan.data.recommended_next_step.id, 'restore_npm_omit_dev');
-    assert.equal(omitPlan.data.recommended_next_step.safe_to_run, false);
-    assert.equal(omitPlan.data.recommended_next_step.requires_human, true);
-    assertActionContracts(omitPlan);
-    assertNoForbiddenCommands(omitPlan);
-
-    invoked.length = 0;
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: 'dev\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.ok(applyResult.error.action_ids.includes('restore_npm_omit_dev'));
-    assert.equal(invoked.includes('npm ci --include=dev'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    writeFileSync(join(fixture.work, 'dirty-missing-devdeps.md'), 'dirty must win\n');
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.deepEqual(applyResult.error.action_ids, ['resolve_dirty_worktree']);
-    assert.equal(applyResult.data.recommended_next_step.id, 'resolve_dirty_worktree');
-    assert.equal(invoked.includes('npm ci --include=dev'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    commitFile(fixture.work, 'ahead-missing-devdeps.md', 'ahead must win\n', 'ahead missing devdeps');
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.deepEqual(applyResult.error.action_ids, ['resolve_ahead_branch']);
-    assert.equal(applyResult.data.recommended_next_step.id, 'resolve_ahead_branch');
-    assert.equal(invoked.includes('npm ci --include=dev'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture({ installDevDeps: false });
-  try {
-    commitFile(fixture.work, 'diverged-local-missing-devdeps.md', 'local must win\n', 'local missing devdeps');
-    addRemoteCommit(fixture, 'diverged-remote-missing-devdeps.md');
-    git(fixture.work, ['fetch', 'origin']);
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        if (id === 'npm --version') return { status: 0, stdout: '11.13.0\n', stderr: '' };
-        if (id === 'npm config get omit') return { status: 0, stdout: '\n', stderr: '' };
-        return runGitForInjection(command, args, context);
-      },
-    });
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_UNSAFE_ACTIONS');
-    assert.deepEqual(applyResult.error.action_ids, ['resolve_diverged_branch']);
-    assert.equal(applyResult.data.recommended_next_step.id, 'resolve_diverged_branch');
-    assert.equal(invoked.includes('npm ci --include=dev'), false);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    writeFileSync(join(fixture.work, 'dirty-note.md'), 'dirty worktree must block apply\n');
-    const { result, json: dirtyPlan } = plan(fixture.work);
-    assert.equal(result.status, 0);
-    assertGitRepoContract(dirtyPlan.data.repo);
-    assert.equal(dirtyPlan.data.repo.dirty, true);
-    assert.equal(dirtyPlan.data.repo.freshness, 'dirty');
-    const dirtyAction = dirtyPlan.data.actions.find((action) => action.id === 'resolve_dirty_worktree');
-    assert.ok(dirtyAction, 'dirty plan must include resolve_dirty_worktree');
-    assert.equal(dirtyAction.side_effect, 'read');
-    assert.equal(dirtyAction.command, 'git status --porcelain');
-    assert.equal(dirtyAction.safe_to_run, false);
-    assert.equal(dirtyAction.requires_human, true);
-    assert.match(dirtyAction.suggested_manual_resolution, /commit, stash, or discard/i);
-    assertActionContracts(dirtyPlan);
-    assertNoForbiddenCommands(dirtyPlan);
-
-    assertBlockedApply(fixture.work, 'resolve_dirty_worktree');
-    assert.match(readFileSync(join(fixture.work, 'dirty-note.md'), 'utf8'), /dirty worktree/);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const localHead = commitFile(fixture.work, 'local-ahead.md', 'local-only\n', 'local ahead');
-    const { json: aheadPlan } = plan(fixture.work);
-    assert.equal(aheadPlan.data.repo.ahead, 1);
-    assert.equal(aheadPlan.data.repo.behind, 0);
-    assert.equal(aheadPlan.data.repo.diverged, false);
-    assert.equal(aheadPlan.data.repo.freshness, 'ahead');
-    assert.equal(aheadPlan.data.recommended_next_step.id, 'resolve_ahead_branch');
-    assert.equal(aheadPlan.data.recommended_next_step.command, 'git status --porcelain');
-    assert.equal(aheadPlan.data.recommended_next_step.side_effect, 'read');
-    assert.equal(aheadPlan.data.recommended_next_step.safe_to_run, false);
-    assertActionContracts(aheadPlan);
-    assertNoForbiddenCommands(aheadPlan);
-
-    assertBlockedApply(fixture.work, 'resolve_ahead_branch');
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), localHead);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const remoteHead = addRemoteCommit(fixture, 'behind.md');
-    git(fixture.work, ['fetch', 'origin']);
-    const { json: behindPlan } = plan(fixture.work);
-    assert.equal(behindPlan.data.repo.ahead, 0);
-    assert.equal(behindPlan.data.repo.behind, 1);
-    assert.equal(behindPlan.data.repo.diverged, false);
-    assert.equal(behindPlan.data.repo.freshness, 'behind');
-    assert.equal(behindPlan.data.recommended_next_step.id, 'git_pull_ff_only');
-    assert.equal(behindPlan.data.recommended_next_step.side_effect, 'write');
-    assert.equal(behindPlan.data.recommended_next_step.command, 'git pull --ff-only');
-    assert.equal(behindPlan.data.recommended_next_step.safe_to_run, true);
-    assert.equal(behindPlan.data.recommended_next_step.requires_human, false);
-    assertActionContracts(behindPlan);
-    assertNoForbiddenCommands(behindPlan);
-
-    const applyResult = apply(fixture.work);
-    assert.equal(applyResult.result.status, 0);
-    assert.equal(applyResult.json.success, true);
-    assert.ok(applyResult.json.data.applied_actions.some((action) => action.id === 'git_pull_ff_only'));
-    assert.ok(applyResult.json.data.applied_actions.some((action) => action.id === 'verify_stack'));
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), remoteHead);
-    assert.equal(applyResult.json.data.repo.freshness, 'current');
-    assert.equal(applyResult.json.data.recommended_next_step.id, 'none');
-    assertNoForbiddenCommands(applyResult.json);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const localHead = commitFile(fixture.work, 'local-diverged.md', 'local-only\n', 'local diverged');
-    addRemoteCommit(fixture, 'remote-diverged.md');
-    git(fixture.work, ['fetch', 'origin']);
-    const { json: divergedPlan } = plan(fixture.work);
-    assert.equal(divergedPlan.data.repo.ahead, 1);
-    assert.equal(divergedPlan.data.repo.behind, 1);
-    assert.equal(divergedPlan.data.repo.diverged, true);
-    assert.equal(divergedPlan.data.repo.freshness, 'diverged');
-    assert.equal(divergedPlan.data.recommended_next_step.id, 'resolve_diverged_branch');
-    assert.equal(divergedPlan.data.recommended_next_step.command, 'git status --porcelain');
-    assert.equal(divergedPlan.data.recommended_next_step.side_effect, 'read');
-    assert.equal(divergedPlan.data.recommended_next_step.safe_to_run, false);
-    assertActionContracts(divergedPlan);
-    assertNoForbiddenCommands(divergedPlan);
-
-    assertBlockedApply(fixture.work, 'resolve_diverged_branch');
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), localHead);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const root = makeLocalFixture();
-  try {
-    const { json: noUpstreamPlan } = plan(root);
-    assert.equal(noUpstreamPlan.data.partial, true);
-    assert.equal(noUpstreamPlan.data.repo.upstream, null);
-    assert.equal(noUpstreamPlan.data.repo.freshness, 'unknown');
-    assert.equal(noUpstreamPlan.data.repo.remote_probe.status, 'unknown_upstream');
-    assert.notEqual(noUpstreamPlan.data.recommended_next_step.id, 'none');
-    assertActionContracts(noUpstreamPlan);
-    assertNoForbiddenCommands(noUpstreamPlan);
-    assertBlockedApply(root, 'resolve_unknown_git_freshness');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    git(fixture.work, ['checkout', '--detach', 'HEAD']);
-    const { json: detachedPlan } = plan(fixture.work);
-    assert.equal(detachedPlan.data.partial, true);
-    assert.equal(detachedPlan.data.repo.branch, null);
-    assert.equal(detachedPlan.data.repo.freshness, 'unknown');
-    assert.equal(detachedPlan.data.repo.remote_probe.status, 'unknown_upstream');
-    assert.notEqual(detachedPlan.data.recommended_next_step.id, 'none');
-    assertActionContracts(detachedPlan);
-    assertNoForbiddenCommands(detachedPlan);
-    assertBlockedApply(fixture.work, 'resolve_unknown_git_freshness');
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    git(fixture.work, ['remote', 'set-url', 'origin', join(fixture.base, 'missing.git')]);
-    const { json: unreachablePlan } = plan(fixture.work);
-    assert.equal(unreachablePlan.data.partial, true);
-    assert.equal(unreachablePlan.data.repo.freshness, 'unknown');
-    assert.equal(unreachablePlan.data.repo.remote_probe.status, 'unreachable');
-    assert.match(unreachablePlan.data.repo.remote_probe.error, /repository|does not appear|Could not read|not found/i);
-    assert.notEqual(unreachablePlan.data.recommended_next_step.id, 'none');
-    assertActionContracts(unreachablePlan);
-    assertNoForbiddenCommands(unreachablePlan);
-    assertBlockedApply(fixture.work, 'resolve_unknown_git_freshness');
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    addRemoteCommit(fixture, 'pull-failure.md');
-    git(fixture.work, ['fetch', 'origin']);
-    const localHead = git(fixture.work, ['rev-parse', 'HEAD']);
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        if (gitCommandId(command, args) === 'git pull --ff-only') {
-          return {
-            status: 1,
-            stdout: 'simulated pull stdout\n',
-            stderr: 'simulated pull failure\n',
-            message: 'simulated pull failed',
-          };
-        }
-        return runGitForInjection(command, args, context);
-      },
-    });
-
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.mode, 'apply');
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_GIT_PULL_FAILED');
-    assert.match(applyResult.data.git_error.stdout, /simulated pull stdout/);
-    assert.match(applyResult.data.git_error.stderr, /simulated pull failure/);
-    assert.match(applyResult.data.git_error.message, /simulated pull failed/);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), localHead);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    addRemoteCommit(fixture, 'fetch-failure.md');
-    const localHead = git(fixture.work, ['rev-parse', 'HEAD']);
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        if (gitCommandId(command, args) === 'git fetch --prune') {
-          return {
-            status: 1,
-            stdout: 'simulated fetch stdout\n',
-            stderr: 'simulated fetch failure\n',
-            message: 'simulated fetch failed',
-          };
-        }
-        return runGitForInjection(command, args, context);
-      },
-    });
-
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.mode, 'apply');
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_GIT_FETCH_FAILED');
-    assert.match(applyResult.data.git_error.stdout, /simulated fetch stdout/);
-    assert.match(applyResult.data.git_error.stderr, /simulated fetch failure/);
-    assert.match(applyResult.data.git_error.message, /simulated fetch failed/);
-    assert.deepEqual(applyResult.data.applied_actions, []);
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), localHead);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    addRemoteCommit(fixture, 'recheck-unsafe.md');
-    const localHead = git(fixture.work, ['rev-parse', 'HEAD']);
-    const invoked = [];
-    const applyResult = applyGuiUpgrade({
-      repoRoot: fixture.work,
-      commandRunner(command, args, context) {
-        const id = gitCommandId(command, args);
-        invoked.push(id);
-        const result = runGitForInjection(command, args, context);
-        if (id === 'git fetch --prune' && result.status === 0) {
-          writeFileSync(join(fixture.work, 'unsafe-after-fetch.md'), 'dirty after fetch\n');
-        }
-        return result;
-      },
-    });
-
-    assert.equal(applyResult.success, false);
-    assert.equal(applyResult.mode, 'apply');
-    assert.equal(applyResult.error.code, 'GUI_UPGRADE_GIT_RECHECK_UNSAFE');
-    assert.deepEqual(applyResult.data.applied_actions, [
-      { id: 'git_fetch_prune', command: 'git fetch --prune' },
-    ]);
-    assert.equal(invoked.includes('git pull --ff-only'), false);
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), localHead);
-    assert.match(readFileSync(join(fixture.work, 'unsafe-after-fetch.md'), 'utf8'), /dirty after fetch/);
-    assertNoForbiddenCommands(applyResult);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-{
-  const fixture = makeRemoteFixture();
-  try {
-    const remoteHead = addRemoteCommit(fixture, 'stale-tracking.md');
-    const { json: stalePlan } = plan(fixture.work);
-    assert.equal(stalePlan.data.repo.ahead, 0);
-    assert.equal(stalePlan.data.repo.behind, 0);
-    assert.equal(stalePlan.data.repo.freshness, 'behind');
-    assert.equal(stalePlan.data.repo.remote_probe.status, 'stale_tracking');
-    assert.equal(stalePlan.data.repo.remote_probe.remote_head, remoteHead);
-    assert.equal(stalePlan.data.recommended_next_step.id, 'git_refresh_then_pull_ff_only');
-    assert.equal(stalePlan.data.recommended_next_step.side_effect, 'write');
-    assert.equal(stalePlan.data.recommended_next_step.command, 'git fetch --prune && git pull --ff-only');
-    assert.equal(stalePlan.data.recommended_next_step.safe_to_run, true);
-    assert.equal(stalePlan.data.recommended_next_step.requires_human, false);
-    assertActionContracts(stalePlan);
-    assertNoForbiddenCommands(stalePlan);
-
-    const applyResult = apply(fixture.work);
-    assert.equal(applyResult.result.status, 0);
-    assert.equal(applyResult.json.success, true);
-    assert.deepEqual(applyResult.json.data.applied_actions, [
-      { id: 'git_fetch_prune', command: 'git fetch --prune' },
-      { id: 'git_pull_ff_only', command: 'git pull --ff-only' },
-      { id: 'verify_stack', command: 'npm run verify-stack' },
-      { id: 'sync_skill', command: 'npm run sync-skill' },
-    ]);
-    assert.equal(git(fixture.work, ['rev-parse', 'HEAD']), remoteHead);
-    assert.equal(applyResult.json.data.repo.freshness, 'current');
-    assert.equal(applyResult.json.data.recommended_next_step.id, 'none');
-    assertNoForbiddenCommands(applyResult.json);
-  } finally {
-    rmSync(fixture.base, { recursive: true, force: true });
-  }
-}
-
-console.log('gui upgrade atom S5 verify-stack closure OK');
+assert.deepEqual(requiredBackendModules, ['fastapi', 'uvicorn', 'pydantic_core', 'PIL']);
+console.log('gui upgrade reinstall-required contract OK');

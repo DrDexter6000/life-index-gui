@@ -154,6 +154,7 @@
   "topicCreate": "造物",
   "topicLife": "日常",
   "titleLabel": "标题",
+  "titleCharacterLimit": "{{current}}/{{max}} · 最多 {{max}} 个字符",
   "recordPlaceholder": "今天你想记录什么...",
   "moodInputPlaceholder": "输入心情...",
   "locate": "定位",
