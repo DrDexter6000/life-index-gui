@@ -41,6 +41,7 @@ export default function TheCore() {
   const draft = useJournalDraftStore();
   const setDraftContent = draft.setContent;
   const updateDraftMetadata = draft.updateMetadata;
+  const refreshDraftDateIfPristine = draft.refreshDateIfPristine;
   const createJournal = useCreateJournal();
   const updateJournal = useUpdateJournal();
   const { enterEtherDissolve, exitEtherDissolve, isEtherDissolve, homeActivated, setHomeActivated } = useUIStore();
@@ -170,6 +171,9 @@ export default function TheCore() {
       setHomeActivated(true);
     } else {
       recoveredDraftScopeRef.current = null;
+      if (!isEditMode && !isAppendMode) {
+        refreshDraftDateIfPristine();
+      }
     }
     setDraftCacheReady(true);
 
@@ -189,7 +193,15 @@ export default function TheCore() {
     return () => {
       cancelled = true;
     };
-  }, [draftScope, setDraftContent, setHomeActivated, updateDraftMetadata]);
+  }, [
+    draftScope,
+    isAppendMode,
+    isEditMode,
+    refreshDraftDateIfPristine,
+    setDraftContent,
+    setHomeActivated,
+    updateDraftMetadata,
+  ]);
 
   useEffect(() => {
     if (!draftCacheReady) return;
@@ -320,10 +332,15 @@ export default function TheCore() {
         return;
       }
 
+      if (!draft.metadata.date.trim()) {
+        setSaveError(getErrorMessage({ code: 'VALIDATION_ERROR' }));
+        return;
+      }
+
       const result = await createJournal.mutateAsync({
         title: draft.metadata.title || t('untitled'),
         content: draft.content,
-        date: new Date().toISOString().split('T')[0],
+        date: draft.metadata.date,
         topic: draft.metadata.topics?.join(','),
         mood: draft.metadata.moods?.join(','),
         people: draft.metadata.people?.join(','),

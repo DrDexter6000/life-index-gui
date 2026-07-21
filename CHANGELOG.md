@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-21
+
+### What users get
+- New journals use the device-local date. Re-entering a fresh blank journal or resetting the draft refreshes that date, and an empty date is blocked before Save.
+- If browser location, city lookup, or weather lookup is unavailable, location and weather remain editable so they can be filled in manually and saved.
+- With Life Index CLI 1.5.3 or later, explicit structured location and weather values from the GUI remain authoritative; CLI defaults or lookup apply only when the corresponding field is missing.
+
+### Included in this release
+- The public source snapshot now includes the focused The Core behavior tests alongside the implementation.
+- Runtime-neutral validation and foundation for the existing Host Agent path. This does not add or prove support for a second Host Agent Runtime, Hermes, or ACP.
+
 ## [0.5.1] - 2026-07-19
 
 - Removed runtime external font/CDN requests while retaining outlined and rounded icons through local Material Symbols icon fonts from exact `@fontsource` production dependencies.

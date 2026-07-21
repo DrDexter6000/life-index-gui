@@ -145,6 +145,15 @@ only from the same schema with `success: false`, `data: null`, and a structured
 contract error; the GUI never infers capability from human-readable wording
 and never falls back to the legacy JSON/base64 attachment export.
 
+### Journal structured-input authority
+
+Visible GUI `location` and `weather` fields, whether browser auto-filled or manually edited, are explicit authoritative structured arguments to Core.
+Empty-string GUI fields are omitted before the Core call; whitespace-only values may be forwarded, and CLI Core trims them to missing before applying its configured location default or automatic weather lookup.
+GUI/backend must not ask Core to infer either field from journal body marker
+lines; those lines remain verbatim ordinary content. This consumes the CLI
+contract without changing the Host Agent metadata proposal's exact-eight field
+boundary or adding any GUI runtime, AI+, provenance, or schema surface.
+
 ## Stable Command Matrix
 
 | Capability | CLI surface | GUI use | Status |

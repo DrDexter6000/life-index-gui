@@ -458,6 +458,12 @@ review.
 Run the reusable conformance kit against any bridge before pointing the GUI at
 it:
 
+The public export already stages `host_agent_bridge/` recursively. Within that
+source surface, the neutral schemas, frozen vectors, fake binding,
+provider-neutral runner, and HTTP conformance harness are intentionally reusable
+conformance-kit assets; they are not production dependencies of
+`http_sse_driver.py`.
+
 ```bash
 python -m host_agent_bridge.conformance --base-url http://127.0.0.1:8791 --expect ready
 ```

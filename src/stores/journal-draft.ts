@@ -34,28 +34,36 @@ interface JournalDraftActions {
   setLocation: (location: string) => void;
   setWeather: (weather: string) => void;
   setProject: (project: string) => void;
+  refreshDateIfPristine: () => void;
   markAsSaved: () => void;
   reset: () => void;
 }
 
-const defaultMetadata: JournalMetadata = {
-  title: '',
-  date: new Date().toISOString().split('T')[0],
-  topics: [],
-  moods: [],
-  people: [],
-  location: '',
-  weather: '',
-  project: '',
-  abstract: '',
-  tags: [],
-  links: [],
-};
+function createDefaultMetadata(): JournalMetadata {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+
+  return {
+    title: '',
+    date: `${year}-${month}-${day}`,
+    topics: [],
+    moods: [],
+    people: [],
+    location: '',
+    weather: '',
+    project: '',
+    abstract: '',
+    tags: [],
+    links: [],
+  };
+}
 
 export const useJournalDraftStore = create<JournalDraftState & JournalDraftActions>()(
   immer((set) => ({
     content: '',
-    metadata: { ...defaultMetadata },
+    metadata: createDefaultMetadata(),
     isDirty: false,
     lastSaved: null,
 
@@ -131,6 +139,13 @@ export const useJournalDraftStore = create<JournalDraftState & JournalDraftActio
         state.isDirty = true;
       }),
 
+    refreshDateIfPristine: () =>
+      set((state) => {
+        if (!state.isDirty && state.content === '') {
+          state.metadata.date = createDefaultMetadata().date;
+        }
+      }),
+
     markAsSaved: () =>
       set((state) => {
         state.isDirty = false;
@@ -140,7 +155,7 @@ export const useJournalDraftStore = create<JournalDraftState & JournalDraftActio
     reset: () =>
       set((state) => {
         state.content = '';
-        state.metadata = { ...defaultMetadata };
+        state.metadata = createDefaultMetadata();
         state.isDirty = false;
         state.lastSaved = null;
       }),
