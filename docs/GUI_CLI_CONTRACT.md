@@ -324,6 +324,13 @@ Backend rules:
 
 - Backend may validate blank/oversized requests, relay SSE frames, normalize
   standard error envelopes, and preserve additive fields.
+- For an explicitly marked native-Markdown query envelope, backend may extract
+  only bounded, deduplicated canonical `/journal/<safe-id>` Markdown-link
+  candidates and verify each through the existing stable
+  `journal get --path Journals/<id>.md --json` contract. Final evidence is
+  rebuilt only from matching CLI `rel_path`, `title`, and `date`; CLI content,
+  Host labels, claimed evidence, traces, stderr, and runtime logs are not
+  evidence sources.
 - Backend must not classify intent, choose `aggregate`/`trajectory`/`search`,
   synthesize answers, repair host-agent output, or extract semantic metadata.
 - Backend must not call LLM APIs or store model/provider credentials.
@@ -336,6 +343,10 @@ Frontend rules:
   and show `mode`/`reason` beside it.
 - Unknown future modes must render with neutral styling and raw reason text.
 - Evidence ids must become journal links only when a safe route id is present.
+- Summary Markdown `/journal/...` links are clickable only when the same safe
+  id appears in the response's CLI-verified evidence; other internal journal
+  links render as text. External HTTP(S) links remain ordinary links and do not
+  count as evidence.
 - AI+ feature flags default on for the GUI surface, but Host Agent readiness is
   still the hard gate. Without a configured host agent, AI+ must render
   offline/unavailable rather than synthesizing or faking an answer.
@@ -372,6 +383,11 @@ Query final target:
 ```
 
 Metadata proposal target:
+
+After an explicit request succeeds, the GUI may place proposals into normal
+editable draft inputs only when each target was empty at request time and is
+still unchanged; existing or concurrently edited values win, and persistence
+still requires the normal journal Save action.
 
 ```json
 {

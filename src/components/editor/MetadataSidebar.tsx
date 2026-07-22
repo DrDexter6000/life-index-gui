@@ -28,9 +28,10 @@ type MetadataUnavailableEnvelope = {
   warnings?: string[];
   diagnostics?: unknown;
 };
-type MetadataAgentStatus = 'ready' | 'extracting' | 'filled' | 'failed' | 'timeout' | 'offline';
+type MetadataAgentStatus = 'ready' | 'extracting' | 'filled' | 'partial' | 'reviewed' | 'stale' | 'failed' | 'timeout' | 'offline';
 type ProposalTargetField = 'title' | 'abstract' | 'project' | 'topics' | 'moods' | 'people' | 'tags' | 'links';
-type ProposalFieldStatus = 'pending' | 'accepted' | 'rejected' | 'stale';
+type ProposalFieldOutcome = 'filled' | 'preserved' | 'not-filled';
+type ProposalFieldStatus = ProposalFieldOutcome | 'stale';
 type NormalizedProposalValue = string | string[];
 type CachedMetadataProposal = {
   scope: string;
@@ -38,16 +39,19 @@ type CachedMetadataProposal = {
   revisionIdentity: string;
   fields: Record<string, ProposalField>;
   baseValues: Record<ProposalTargetField, NormalizedProposalValue>;
+  outcomes: Record<ProposalTargetField, ProposalFieldOutcome>;
+  appliedTargets: ProposalTargetField[];
+  responseWasFresh: boolean;
   requestId: string | null;
   requestedAt: number;
   savedAt: number;
 };
 type MetadataProposalReview = {
   record: CachedMetadataProposal;
-  statuses: Record<string, ProposalFieldStatus>;
 };
 
 let metadataProposalSequence = 0;
+let lastConsumedMetadataProposalKey: string | null = null;
 const METADATA_PROPOSAL_CACHE_TTL_MS = 5 * 60 * 1000;
 const TITLE_MAX_LENGTH = 20;
 const metadataProposalCache = new Map<string, CachedMetadataProposal>();
@@ -72,6 +76,16 @@ const PROPOSAL_TARGET_FIELDS: readonly ProposalTargetField[] = [
   'tags',
   'links',
 ];
+const PROPOSAL_FIELD_LABEL_KEYS: Record<ProposalTargetField, string> = {
+  title: 'titleLabel',
+  abstract: 'abstractLabel',
+  project: 'project',
+  topics: 'topics',
+  moods: 'moods',
+  people: 'people',
+  tags: 'tagsLabel',
+  links: 'linksLabel',
+};
 
 const TOPICS = [
   { key: 'work', labelKey: 'topicWork' as const, color: 'var(--color-gold)' },
@@ -159,6 +173,47 @@ function proposalValuesEqual(left: NormalizedProposalValue | undefined, right: N
   return JSON.stringify(left ?? '') === JSON.stringify(right ?? '');
 }
 
+function proposalValueIsEmpty(value: NormalizedProposalValue): boolean {
+  return value.length === 0;
+}
+
+function proposalValueCanAutoFill(target: ProposalTargetField, value: NormalizedProposalValue): boolean {
+  if (proposalValueIsEmpty(value)) return false;
+  return target !== 'title' || (typeof value === 'string' && value.length <= TITLE_MAX_LENGTH);
+}
+
+function evaluateMetadataProposal(
+  fields: Record<string, ProposalField>,
+  baseValues: Record<ProposalTargetField, NormalizedProposalValue>,
+  metadata: JournalMetadata,
+): {
+  patch: Partial<JournalMetadata>;
+  outcomes: Record<ProposalTargetField, ProposalFieldOutcome>;
+} {
+  const patch: Partial<JournalMetadata> = {};
+  const outcomes = {} as Record<ProposalTargetField, ProposalFieldOutcome>;
+
+  for (const target of PROPOSAL_TARGET_FIELDS) {
+    const baseValue = baseValues[target];
+    const currentValue = metadataFieldValue(metadata, target);
+    const field = fields[target];
+    const proposedValue = normalizeProposalFieldValue(target, field?.value);
+    const baseWasEmpty = proposalValueIsEmpty(baseValue);
+    const currentStillMatchesBase = proposalValuesEqual(currentValue, baseValue);
+
+    if (field && baseWasEmpty && currentStillMatchesBase && proposalValueCanAutoFill(target, proposedValue)) {
+      Object.assign(patch, proposalPatch(target, field));
+      outcomes[target] = 'filled';
+    } else if (!baseWasEmpty || !currentStillMatchesBase) {
+      outcomes[target] = 'preserved';
+    } else {
+      outcomes[target] = 'not-filled';
+    }
+  }
+
+  return { patch, outcomes };
+}
+
 function supportedProposalFields(fields: Record<string, ProposalField> | undefined): Record<string, ProposalField> {
   const entries = Object.entries(fields ?? {});
   // The API parser rejects unknown field keys before this component receives a
@@ -202,8 +257,6 @@ function metadataProposalContext(metadata: JournalMetadata, draftContent: string
   return {
     content: draftContent,
     date: metadata.date,
-    location: metadata.location || '',
-    weather: metadata.weather || '',
   };
 }
 
@@ -254,10 +307,19 @@ function isValidCachedMetadataProposal(value: unknown): value is CachedMetadataP
     || typeof record.requestedAt !== 'number' || !Number.isFinite(record.requestedAt)
     || typeof record.savedAt !== 'number' || !Number.isFinite(record.savedAt)
     || !record.fields || typeof record.fields !== 'object'
+    || !record.outcomes || typeof record.outcomes !== 'object' || Array.isArray(record.outcomes)
+    || !Array.isArray(record.appliedTargets)
+    || !record.appliedTargets.every((target) => PROPOSAL_TARGET_FIELDS.includes(target))
+    || typeof record.responseWasFresh !== 'boolean'
     || !record.baseValues || typeof record.baseValues !== 'object' || Array.isArray(record.baseValues)) return false;
   if (!PROPOSAL_TARGET_FIELDS.every((target) => (
     Object.prototype.hasOwnProperty.call(record.baseValues, target)
     && isValidNormalizedProposalValue(target, record.baseValues[target])
+  ))) return false;
+  if (!PROPOSAL_TARGET_FIELDS.every((target) => (
+    record.outcomes?.[target] === 'filled'
+    || record.outcomes?.[target] === 'preserved'
+    || record.outcomes?.[target] === 'not-filled'
   ))) return false;
   return Object.entries(record.fields).every(([fieldName, field]) => Boolean(proposalTargetField(fieldName)) && isValidProposalField(field));
 }
@@ -294,10 +356,6 @@ function readMetadataProposalCache(scope: string, contextIdentity: string, revis
     record,
     contextMatches: record.contextIdentity === contextIdentity && record.revisionIdentity === revisionIdentity,
   };
-}
-
-function createProposalStatuses(fields: Record<string, ProposalField>): Record<string, ProposalFieldStatus> {
-  return Object.fromEntries(Object.keys(fields).map((fieldName) => [fieldName, 'pending' as const]));
 }
 
 function truncateDiagnostic(value: string): string {
@@ -391,8 +449,8 @@ function metadataIssueStatus(proposal: MetadataUnavailableEnvelope): MetadataAge
  *
  * The browser only provides coordinates. Naming and weather lookup go through
  * backend adapter routes, and writing still happens through the journal save
- * contract. Smart metadata is host-agent proposal only; GUI applies nothing
- * directly into editable fields when the host agent returns them.
+ * contract. Smart metadata may fill only request-snapshot-empty fields that
+ * remain empty; normal journal Save remains the only persistence boundary.
  */
 export function MetadataSidebar({
   metadata,
@@ -401,7 +459,7 @@ export function MetadataSidebar({
   onUpdate,
   smartCapabilityAvailable = true,
 }: MetadataSidebarProps) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const [newPerson, setNewPerson] = useState('');
   const [newMood, setNewMood] = useState('');
   const [locationStatus, setLocationStatus] = useState<string | null>(null);
@@ -409,12 +467,11 @@ export function MetadataSidebar({
   const [isResolvingLocation, setIsResolvingLocation] = useState(false);
   const [isResolvingWeather, setIsResolvingWeather] = useState(false);
   const [activeProposalRequestId, setActiveProposalRequestId] = useState<string | null>(null);
-  const [filledProposalKey, setFilledProposalKey] = useState<string | null>(null);
   const contextIdentity = metadataProposalContextIdentity(metadata, draftContent);
   const revisionIdentity = metadataProposalRevisionIdentity(metadata, draftContent);
   const [proposalReview, setProposalReview] = useState<MetadataProposalReview | null>(() => {
     const cached = readMetadataProposalCache(draftScope, contextIdentity, revisionIdentity);
-    return cached.record ? { record: cached.record, statuses: createProposalStatuses(cached.record.fields) } : null;
+    return cached.record ? { record: cached.record } : null;
   });
   const [statusDetailOpen, setStatusDetailOpen] = useState(false);
   const autoEnrichmentStarted = useRef(false);
@@ -454,22 +511,46 @@ export function MetadataSidebar({
         ? { reason: metadataProposal.error.message, diagnostics: { error: metadataProposal.error.message } }
         : null;
   const metadataAgentIssueStatus = metadataIssueEnvelope ? metadataIssueStatus(metadataIssueEnvelope) : null;
-  const metadataAgentStatus: MetadataAgentStatus = metadataProposal.isPending
-    ? 'extracting'
-    : metadataAgentIssueStatus
-      ?? (filledProposalKey ? 'filled' : smartMetadataReady ? 'ready' : 'offline');
   const metadataAgentCanRequest = smartMetadataReady && !metadataProposal.isPending;
-  const metadataAgentHasDetails = Boolean(metadataIssueEnvelope);
+  const metadataAgentHasDetails = Boolean(metadataIssueEnvelope || proposalReview);
   const metadataAgentDetailReason = metadataIssueEnvelope ? metadataUnavailableReason(metadataIssueEnvelope) : null;
   const metadataAgentTiming =
     metadataIssueEnvelope?.diagnostics && typeof metadataIssueEnvelope.diagnostics === 'object'
       ? metadataTimingSummary((metadataIssueEnvelope.diagnostics as Record<string, unknown>).timings)
       : null;
 
+  const proposalContextStale = Boolean(
+    proposalReview
+    && (!proposalReview.record.responseWasFresh
+      || metadataProposalExpired(proposalReview.record)
+      || proposalReview.record.scope !== draftScope
+      || proposalReview.record.contextIdentity !== contextIdentity
+      || proposalReview.record.revisionIdentity !== revisionIdentity),
+  );
+  const unfilledProposalTargets = proposalReview && !proposalContextStale
+    ? PROPOSAL_TARGET_FIELDS.filter((target) => proposalValueIsEmpty(metadataFieldValue(metadata, target)))
+    : [];
+  const appliedProposalCount = proposalReview && !proposalContextStale
+    ? proposalReview.record.appliedTargets.length
+    : 0;
+  const metadataAgentStatus: MetadataAgentStatus = metadataProposal.isPending
+    ? 'extracting'
+    : metadataAgentIssueStatus
+      ?? (proposalReview
+        ? proposalContextStale
+          ? 'stale'
+          : appliedProposalCount > 0
+            ? unfilledProposalTargets.length > 0 ? 'partial' : 'filled'
+            : 'reviewed'
+        : smartMetadataReady ? 'ready' : 'offline');
+
   const metadataStatusCopyKey = {
     ready: 'metadataAgentStatusReady',
     extracting: 'metadataAgentStatusExtracting',
     filled: 'metadataAgentStatusFilled',
+    partial: 'metadataAgentStatusPartial',
+    reviewed: 'metadataAgentStatusReviewed',
+    stale: 'metadataAgentStatusStale',
     failed: 'metadataAgentStatusFailed',
     timeout: 'metadataAgentStatusTimeout',
     offline: 'metadataAgentStatusOffline',
@@ -479,33 +560,21 @@ export function MetadataSidebar({
     ready: '✦',
     extracting: 'progress_activity',
     filled: 'check',
+    partial: 'pending_actions',
+    reviewed: 'done_all',
+    stale: 'history_toggle_off',
     failed: 'warning',
     timeout: 'timer_off',
     offline: 'power_off',
   } satisfies Record<MetadataAgentStatus, string>;
 
-  const metadataStatusClass = {
-    ready: 'border-[var(--color-cyan)]/30 bg-[var(--color-ether-surface-ghost)] text-[var(--color-cyan)] hover:border-[var(--color-cyan)]/45',
-    extracting: 'border-[var(--color-amber)]/45 bg-[var(--color-amber-10)] text-[var(--color-amber)]',
-    filled: 'border-[var(--color-green)]/45 bg-[var(--color-ether-surface-ghost)] text-[var(--color-green)] hover:border-[var(--color-green)]/60',
-    failed: 'border-[var(--color-coral)]/45 bg-[var(--color-coral-15)] text-[var(--color-coral)] hover:border-[var(--color-coral)]/60',
-    timeout: 'border-[var(--color-coral)]/45 bg-[var(--color-coral-15)] text-[var(--color-coral)] hover:border-[var(--color-coral)]/60',
-    offline: 'border-[var(--color-muted)]/30 bg-[var(--color-ether-surface-ghost)] text-[var(--color-muted)] hover:border-[var(--color-muted)]/45',
-  } satisfies Record<MetadataAgentStatus, string>;
+  const metadataStatusClass = 'border-[var(--color-cyan)]/30 bg-[var(--color-ether-surface-ghost)] text-[var(--color-cyan)] hover:border-[var(--color-cyan)]/45';
 
   const metadataDetailCopyKey = metadataAgentStatus === 'timeout'
     ? 'metadataAgentDetailTimeout'
     : metadataAgentStatus === 'offline'
       ? 'metadataAgentDetailOffline'
       : 'metadataAgentDetailFailure';
-
-  const proposalContextStale = Boolean(
-    proposalReview
-    && (metadataProposalExpired(proposalReview.record)
-      || proposalReview.record.scope !== draftScope
-      || proposalReview.record.contextIdentity !== contextIdentity
-      || proposalReview.record.revisionIdentity !== revisionIdentity),
-  );
 
   useEffect(() => {
     const cached = readMetadataProposalCache(draftScope, contextIdentity, revisionIdentity);
@@ -514,7 +583,7 @@ export function MetadataSidebar({
         if (current?.record.requestId === cached.record.requestId && current.record.savedAt === cached.record.savedAt) {
           return current;
         }
-        return { record: cached.record, statuses: createProposalStatuses(cached.record.fields) };
+        return { record: cached.record };
       }
       if (current && current.record.scope === draftScope) return current;
       return null;
@@ -526,15 +595,13 @@ export function MetadataSidebar({
     setStatusDetailOpen(false);
     const cached = readMetadataProposalCache(draftScope, contextIdentity, revisionIdentity);
     if (cached.record && cached.contextMatches) {
-      setProposalReview({ record: cached.record, statuses: createProposalStatuses(cached.record.fields) });
-      setFilledProposalKey(`cache:${cached.record.savedAt}`);
+      setProposalReview({ record: cached.record });
       return;
     }
 
     const requestId = createMetadataProposalRequestId();
     setActiveProposalRequestId(requestId);
     seenProposalKey.current = null;
-    setFilledProposalKey(null);
     setProposalReview(null);
     requestSnapshotById.current.clear();
     requestSnapshotById.current.set(requestId, {
@@ -651,7 +718,7 @@ export function MetadataSidebar({
     if (activeProposalRequestId && proposalRequestId !== activeProposalRequestId) return;
 
     const proposalKey = `${proposalRequestId ?? 'legacy'}:${JSON.stringify(proposal.fields ?? {})}`;
-    if (seenProposalKey.current === proposalKey) return;
+    if (seenProposalKey.current === proposalKey || lastConsumedMetadataProposalKey === proposalKey) return;
 
     const fields = supportedProposalFields(proposal.fields as Record<string, ProposalField>);
     if (Object.keys(fields).length === 0) return;
@@ -669,64 +736,42 @@ export function MetadataSidebar({
       tags: metadataFieldValue(metadata, 'tags'),
       links: metadataFieldValue(metadata, 'links'),
     };
+    const recordScope = requestSnapshot?.scope ?? draftScope;
+    const recordContextIdentity = requestSnapshot?.contextIdentity ?? contextIdentity;
+    const recordRevisionIdentity = requestSnapshot?.revisionIdentity ?? revisionIdentity;
+    const recordRequestedAt = requestSnapshot?.requestedAt ?? requestedAt;
+    const requestContextIsFresh = recordScope === draftScope
+      && recordContextIdentity === contextIdentity
+      && recordRevisionIdentity === revisionIdentity
+      && requestedAt >= recordRequestedAt
+      && requestedAt - recordRequestedAt <= METADATA_PROPOSAL_CACHE_TTL_MS;
+    const evaluation = evaluateMetadataProposal(fields, baseValues, metadata);
+    const patch = requestContextIsFresh ? evaluation.patch : {};
+    const appliedTargets = requestContextIsFresh
+      ? PROPOSAL_TARGET_FIELDS.filter((target) => evaluation.outcomes[target] === 'filled')
+      : [];
     const record: CachedMetadataProposal = {
-      scope: requestSnapshot?.scope ?? draftScope,
-      contextIdentity: requestSnapshot?.contextIdentity ?? contextIdentity,
-      revisionIdentity: requestSnapshot?.revisionIdentity ?? revisionIdentity,
+      scope: recordScope,
+      contextIdentity: recordContextIdentity,
+      revisionIdentity: recordRevisionIdentity,
       fields,
       baseValues,
+      outcomes: evaluation.outcomes,
+      appliedTargets,
+      responseWasFresh: requestContextIsFresh,
       requestId: proposalRequestId,
-      requestedAt: requestSnapshot?.requestedAt ?? requestedAt,
+      requestedAt: recordRequestedAt,
       savedAt: requestedAt,
     };
 
     seenProposalKey.current = proposalKey;
+    lastConsumedMetadataProposalKey = proposalKey;
     writeMetadataProposalCache(record);
-    setFilledProposalKey(proposalKey);
-    setProposalReview({ record, statuses: createProposalStatuses(fields) });
-  }, [activeProposalRequestId, contextIdentity, draftScope, metadata, metadataProposal.data, revisionIdentity]);
-
-  const handleAcceptProposalField = useCallback((fieldName: string) => {
-    const target = proposalTargetField(fieldName);
-    if (!target || !proposalReview) return;
-
-    if (
-      proposalReview.record.scope !== draftScope
-      || proposalReview.record.contextIdentity !== contextIdentity
-      || proposalReview.record.revisionIdentity !== revisionIdentity
-      || metadataProposalExpired(proposalReview.record)
-    ) {
-      setProposalReview((current) => current
-        ? { ...current, statuses: { ...current.statuses, [fieldName]: 'stale' } }
-        : current);
-      return;
+    setProposalReview({ record });
+    if (Object.keys(patch).length > 0) {
+      onUpdate(patch);
     }
-
-    const baseValue = proposalReview.record.baseValues[target];
-    const currentValue = metadataFieldValue(metadata, target);
-    if (!proposalValuesEqual(currentValue, baseValue)) {
-      setProposalReview((current) => current
-        ? { ...current, statuses: { ...current.statuses, [fieldName]: 'stale' } }
-        : current);
-      return;
-    }
-
-    const field = proposalReview.record.fields[fieldName];
-    if (!field) return;
-    const patch = proposalPatch(fieldName, field);
-    if (Object.keys(patch).length === 0) return;
-
-    onUpdate(patch);
-    setProposalReview((current) => current
-      ? { ...current, statuses: { ...current.statuses, [fieldName]: 'accepted' } }
-      : current);
-  }, [contextIdentity, draftScope, metadata, onUpdate, proposalReview, revisionIdentity]);
-
-  const handleRejectProposalField = useCallback((fieldName: string) => {
-    setProposalReview((current) => current
-      ? { ...current, statuses: { ...current.statuses, [fieldName]: 'rejected' } }
-      : current);
-  }, []);
+  }, [activeProposalRequestId, contextIdentity, draftScope, metadata, metadataProposal.data, onUpdate, revisionIdentity]);
 
   const toggleTopic = (topic: string) => {
     const currentTopics = metadata.topics || [];
@@ -783,8 +828,13 @@ export function MetadataSidebar({
     onUpdate({ [key]: parseListProposal(value) });
   };
 
-  const locationHelperText = geolocation.error ?? locationStatus ?? t('locationAutoHint');
+  const locationHelperText = geolocation.error
+    ? t('locationPermissionUnavailable')
+    : locationStatus ?? t('locationAutoHint');
   const weatherHelperText = weatherStatus ?? t('weatherAutoHint');
+  const unfilledProposalFields = unfilledProposalTargets
+    .map((target) => t(PROPOSAL_FIELD_LABEL_KEYS[target]))
+    .join(lang === 'zh' ? '、' : ', ');
 
   return (
     <GlassCard className="p-6 no-hover" hoverable={false} glowEffect={false}>
@@ -798,8 +848,10 @@ export function MetadataSidebar({
             data-testid="metadata-agent-propose-button"
             onClick={handleStatusCapsuleClick}
             disabled={metadataProposal.isPending || (!metadataAgentCanRequest && !metadataAgentHasDetails)}
+            aria-expanded={metadataAgentHasDetails ? statusDetailOpen : undefined}
+            aria-controls={metadataAgentHasDetails ? 'metadata-agent-status-detail' : undefined}
             title={metadataAgentCanRequest ? t('metadataAgentHint') : t('metadataAgentHintUnavailable')}
-            className={`metadata-agent-status-capsule inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm transition-colors ${metadataStatusClass[metadataAgentStatus]}`}
+            className={`metadata-agent-status-capsule inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm transition-colors ${metadataStatusClass}`}
             style={{ fontFamily: 'var(--font-control)' }}
           >
             <span
@@ -836,8 +888,11 @@ export function MetadataSidebar({
 
           {statusDetailOpen && metadataIssueEnvelope && metadataAgentDetailReason && (
             <div
+              id="metadata-agent-status-detail"
               data-testid="metadata-agent-status-detail"
-              className="absolute right-0 top-[calc(100%+0.75rem)] z-30 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-white/[0.08] bg-[var(--color-ether-panel)] p-4 text-left shadow-2xl backdrop-blur-md"
+              role="dialog"
+              aria-label={t(metadataDetailCopyKey)}
+              className="absolute right-0 top-[calc(100%+0.75rem)] z-30 max-h-[min(28rem,calc(100vh-8rem))] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-2xl border border-white/[0.08] bg-[var(--color-ether-panel)] p-4 text-left shadow-2xl backdrop-blur-md"
               style={{ fontFamily: 'var(--font-order)' }}
             >
               <p className="text-sm font-semibold text-[var(--color-primary)]" style={{ fontFamily: 'var(--font-control)' }}>
@@ -874,108 +929,105 @@ export function MetadataSidebar({
               </div>
             </div>
           )}
+
+          {statusDetailOpen && !metadataIssueEnvelope && proposalReview && (
+            <section
+              id="metadata-agent-status-detail"
+              data-testid="metadata-proposal-panel"
+              role="dialog"
+              aria-label={t('metadataProposalReviewTitle')}
+              className="absolute right-0 top-[calc(100%+0.75rem)] z-30 max-h-[min(28rem,calc(100vh-8rem))] w-[min(26rem,calc(100vw-2rem))] space-y-3 overflow-y-auto rounded-2xl border border-white/[0.08] bg-[var(--color-ether-panel)] p-4 text-left shadow-2xl backdrop-blur-md"
+              style={{ fontFamily: 'var(--font-order)' }}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-sm font-semibold text-[var(--color-cyan)]">
+                  {t('metadataProposalReviewTitle')}
+                </h4>
+                <span
+                  data-testid="metadata-proposal-context-status"
+                  className={`text-xs ${proposalContextStale ? 'text-[var(--color-coral)]' : 'text-[var(--color-muted)]'}`}
+                >
+                  {proposalContextStale ? t('metadataProposalStale') : t('metadataProposalCached')}
+                </span>
+              </div>
+
+              {Object.entries(proposalReview.record.fields).map(([fieldName, field]) => {
+                const target = proposalTargetField(fieldName);
+                if (!target) return null;
+                const recordedStatus = proposalReview.record.outcomes[target];
+                const currentValue = metadataFieldValue(metadata, target);
+                const status: ProposalFieldStatus = proposalContextStale
+                  ? 'stale'
+                  : proposalValueIsEmpty(currentValue)
+                    ? 'not-filled'
+                    : recordedStatus === 'not-filled'
+                      ? 'preserved'
+                      : recordedStatus;
+                const formattedCurrentValue = formatDraftValue(currentValue);
+                const proposedValue = formatProposalValue(field.value);
+                const statusCopy = status === 'stale'
+                  ? t('metadataProposalStale')
+                  : status === 'filled'
+                    ? t('metadataProposalFilled')
+                    : status === 'preserved'
+                      ? t('metadataProposalPreserved')
+                      : t('metadataProposalNotFilled');
+
+                return (
+                  <div
+                    key={fieldName}
+                    data-testid={`metadata-proposal-field-${fieldName}`}
+                    className="rounded-xl border border-white/[0.08] p-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--color-primary)]">
+                        {t(PROPOSAL_FIELD_LABEL_KEYS[target])}
+                      </span>
+                      <span
+                        data-testid={`metadata-proposal-status-${fieldName}`}
+                        className={`text-xs ${status === 'stale' ? 'text-[var(--color-coral)]' : status === 'filled' ? 'text-[var(--color-green)]' : 'text-[var(--color-muted)]'}`}
+                      >
+                        {statusCopy}
+                      </span>
+                    </div>
+                    <div
+                      data-testid={`metadata-proposal-diff-${fieldName}`}
+                      className="mt-2 grid gap-2 text-xs text-[var(--color-secondary)] sm:grid-cols-2"
+                    >
+                      <div>
+                        <span className="block text-[var(--color-muted)]">{t('metadataProposalCurrent')}</span>
+                        <span className="break-words text-[var(--color-primary)]">{formattedCurrentValue || '—'}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[var(--color-muted)]">{t('metadataProposalProposed')}</span>
+                        <span className="break-words text-[var(--color-cyan)]">{proposedValue || '—'}</span>
+                      </div>
+                    </div>
+                    {(field.field_source || typeof field.confidence === 'number' || field.rationale) && (
+                      <div className="mt-2 space-y-1 text-xs text-[var(--color-secondary)]">
+                        {field.field_source && <p><span className="text-[var(--color-muted)]">{t('metadataProposalSource')}: </span>{field.field_source}</p>}
+                        {typeof field.confidence === 'number' && Number.isFinite(field.confidence) && (
+                          <p><span className="text-[var(--color-muted)]">{t('metadataProposalConfidence')}: </span>{Math.round(field.confidence * 100)}%</p>
+                        )}
+                        {field.rationale && <p><span className="text-[var(--color-muted)]">{t('metadataProposalRationale')}: </span>{field.rationale}</p>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </section>
+          )}
         </div>
       </div>
 
-      {proposalReview && (
-        <section
-          data-testid="metadata-proposal-panel"
-          className="mb-5 space-y-3 rounded-2xl border border-[var(--color-cyan)]/20 bg-[var(--color-ether-surface-ghost)] p-4"
-          aria-label={t('metadataProposalReviewTitle')}
+      {unfilledProposalFields && (
+        <p
+          data-testid="metadata-agent-unfilled-summary"
+          role="status"
+          className="mb-5 text-right text-xs text-[var(--color-muted)]"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-sm font-semibold text-[var(--color-cyan)]">
-              {t('metadataProposalReviewTitle')}
-            </h4>
-            <span
-              data-testid="metadata-proposal-context-status"
-              className={`text-xs ${proposalContextStale ? 'text-[var(--color-coral)]' : 'text-[var(--color-muted)]'}`}
-            >
-              {proposalContextStale ? t('metadataProposalStale') : t('metadataProposalCached')}
-            </span>
-          </div>
-
-          {Object.entries(proposalReview.record.fields).map(([fieldName, field]) => {
-            const target = proposalTargetField(fieldName);
-            if (!target) return null;
-            const status = proposalContextStale
-              ? 'stale'
-              : proposalReview.statuses[fieldName] ?? 'pending';
-            const currentValue = formatDraftValue(metadataFieldValue(metadata, target));
-            const proposedValue = formatProposalValue(field.value);
-            const controlsDisabled = status !== 'pending' || proposalContextStale;
-
-            return (
-              <div
-                key={fieldName}
-                data-testid={`metadata-proposal-field-${fieldName}`}
-                className="rounded-xl border border-white/[0.08] p-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--color-primary)]">
-                    {fieldName}
-                  </span>
-                  <span
-                    data-testid={`metadata-proposal-status-${fieldName}`}
-                    className={`text-xs ${status === 'stale' ? 'text-[var(--color-coral)]' : status === 'accepted' ? 'text-[var(--color-green)]' : 'text-[var(--color-muted)]'}`}
-                  >
-                    {status === 'stale'
-                      ? t('metadataProposalStale')
-                      : status === 'accepted'
-                        ? t('metadataProposalAccepted')
-                        : status === 'rejected'
-                          ? t('metadataProposalReject')
-                          : t('metadataProposalProposed')}
-                  </span>
-                </div>
-                <div
-                  data-testid={`metadata-proposal-diff-${fieldName}`}
-                  className="mt-2 grid gap-2 text-xs text-[var(--color-secondary)] sm:grid-cols-2"
-                >
-                  <div>
-                    <span className="block text-[var(--color-muted)]">{t('metadataProposalCurrent')}</span>
-                    <span className="break-words text-[var(--color-primary)]">{currentValue || '—'}</span>
-                  </div>
-                  <div>
-                    <span className="block text-[var(--color-muted)]">{t('metadataProposalProposed')}</span>
-                    <span className="break-words text-[var(--color-cyan)]">{proposedValue || '—'}</span>
-                  </div>
-                </div>
-                {(field.field_source || typeof field.confidence === 'number' || field.rationale) && (
-                  <div className="mt-2 space-y-1 text-xs text-[var(--color-secondary)]">
-                    {field.field_source && <p><span className="text-[var(--color-muted)]">{t('metadataProposalSource')}: </span>{field.field_source}</p>}
-                    {typeof field.confidence === 'number' && Number.isFinite(field.confidence) && (
-                      <p><span className="text-[var(--color-muted)]">{t('metadataProposalConfidence')}: </span>{Math.round(field.confidence * 100)}%</p>
-                    )}
-                    {field.rationale && <p><span className="text-[var(--color-muted)]">{t('metadataProposalRationale')}: </span>{field.rationale}</p>}
-                  </div>
-                )}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    data-testid={`metadata-proposal-accept-${fieldName}`}
-                    aria-label={`${t('metadataProposalAccept')} ${fieldName}`}
-                    disabled={controlsDisabled}
-                    onClick={() => handleAcceptProposalField(fieldName)}
-                    className="rounded-full border border-[var(--color-cyan)]/35 px-3 py-1.5 text-xs text-[var(--color-cyan)] transition-colors hover:border-[var(--color-cyan)]/60 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {t('metadataProposalAccept')}
-                  </button>
-                  <button
-                    type="button"
-                    data-testid={`metadata-proposal-reject-${fieldName}`}
-                    aria-label={`${t('metadataProposalReject')} ${fieldName}`}
-                    disabled={controlsDisabled}
-                    onClick={() => handleRejectProposalField(fieldName)}
-                    className="rounded-full border border-white/[0.12] px-3 py-1.5 text-xs text-[var(--color-muted)] transition-colors hover:border-white/[0.24] hover:text-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {t('metadataProposalReject')}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </section>
+          {t('metadataAgentUnfilledSummary', { fields: unfilledProposalFields })}
+        </p>
       )}
 
       <div className="space-y-5">
@@ -1179,7 +1231,7 @@ export function MetadataSidebar({
               {metadata.people?.map((person) => (
                 <span
                   key={person}
-                  className="inline-flex items-center gap-1 px-3 py-1 bg-[var(--color-ether-surface-ghost)] text-[var(--color-primary)] rounded-full text-xs border border-white/[0.06]"
+                  className="inline-flex items-center gap-1 rounded-full border border-[var(--color-cyan)]/30 bg-[var(--color-cyan-15)] px-3 py-1 text-xs text-[var(--color-cyan)]"
                 >
                   {person}
                   <button

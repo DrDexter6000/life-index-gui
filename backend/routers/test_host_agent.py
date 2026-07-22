@@ -30,6 +30,44 @@ def _parse_sse(raw: str):
     return frames
 
 
+def _native_query_envelope(summary: str) -> dict:
+    reason = "native-markdown-evidence-not-yet-verified"
+    return {
+        "schema_version": "gui.host_agent.query_response.v1",
+        "request_id": "native-request",
+        "conversation_id": "native-conversation",
+        "source": "host-agent",
+        "mode": "UNGROUNDED",
+        "reason": reason,
+        "query": "body query",
+        "answer": {
+            "mode": "UNGROUNDED",
+            "reason": reason,
+            "summary": summary,
+            "insights": [],
+            "gap": "pending verification",
+            "suggestions": [],
+        },
+        "evidence": [],
+        "tool_trace": [],
+        "answer_origin": "native-markdown",
+    }
+
+
+def _journal_get_payload(journal_id: str, *, title: str = "Canonical CLI title", date: str = "2026-07-22") -> dict:
+    return {
+        "success": True,
+        "schema_version": "m16.journal.v0",
+        "data": {
+            "rel_path": f"Journals/{journal_id}.md",
+            "date": date,
+            "content": "PRIVATE CONTENT MUST NOT ENTER EVIDENCE",
+            "metadata": {"title": title},
+        },
+        "error": None,
+    }
+
+
 class _RawResponse:
     def __init__(self, text: str | None = None, chunks: list[str] | None = None):
         self.text = text or ""
@@ -93,7 +131,6 @@ def test_host_agent_router_source_has_no_backend_orchestration_calls():
     source = Path(host_agent.__file__).read_text(encoding="utf-8")
 
     forbidden = [
-        "CLIAdapter",
         "aggregate(",
         "trajectory(",
         "smart-search",
@@ -104,6 +141,9 @@ def test_host_agent_router_source_has_no_backend_orchestration_calls():
 
     for token in forbidden:
         assert token not in source
+
+    assert '"journal"' in source
+    assert '"get"' in source
 
 
 def test_host_agent_health_downgrades_false_green_index_stale():
@@ -1206,3 +1246,160 @@ def test_host_agent_metadata_relay_rejects_unknown_weather_field_without_filteri
     assert data["reason"] == "host-agent-envelope-invalid"
     assert data["fields"] == {}
     assert data["policy"]["preserve_user_fields"] is True
+
+
+def test_native_markdown_rebuilds_grounded_evidence_only_from_canonical_cli_output(monkeypatch):
+    monkeypatch.setenv("LIFE_INDEX_HOST_AGENT_URL", "http://host-agent.invalid")
+    journal_id = "2026/07/life-index_2026-07-22_001"
+    summary = f"Read [forged host label](/journal/{journal_id}) and keep **Markdown**."
+
+    async def fake_stream(_payload):
+        yield {"type": "final", "data": _native_query_envelope(summary)}
+
+    with patch("backend.routers.host_agent.stream_host_agent_query", fake_stream):
+        with patch(
+            "backend.routers.host_agent.CLIAdapter.run_json",
+            new_callable=AsyncMock,
+            return_value=_journal_get_payload(journal_id),
+        ) as run_json:
+            response = client.post(
+                "/api/host-agent/query/stream",
+                json={"query": "body query"},
+                headers={"accept": "text/event-stream"},
+            )
+
+    final = json.loads(_parse_sse(response.text)[-1][1])
+    assert final["mode"] == "GROUNDED"
+    assert final["reason"] == "all-native-markdown-journal-citations-verified"
+    assert final["answer"]["summary"] == summary
+    assert final["answer"]["gap"] is None
+    assert final["evidence"] == [
+        {
+            "id": journal_id,
+            "rel_path": f"Journals/{journal_id}.md",
+            "title": "Canonical CLI title",
+            "date": "2026-07-22",
+        }
+    ]
+    assert "answer_origin" not in final
+    assert "content" not in final["evidence"][0]
+    run_json.assert_awaited_once_with(
+        ["journal", "get", "--path", f"Journals/{journal_id}.md", "--json"],
+        timeout=30.0,
+    )
+
+
+def test_native_markdown_rejects_cli_failure_malformed_payload_and_path_mismatch(monkeypatch):
+    monkeypatch.setenv("LIFE_INDEX_HOST_AGENT_URL", "http://host-agent.invalid")
+    ids = [f"2026/07/life-index_2026-07-22_00{index}" for index in range(1, 4)]
+    summary = " ".join(f"[candidate {index}](/journal/{journal_id})" for index, journal_id in enumerate(ids))
+
+    async def fake_stream(_payload):
+        yield {"type": "final", "data": _native_query_envelope(summary)}
+
+    mismatch = _journal_get_payload(ids[2])
+    mismatch["data"]["rel_path"] = "Journals/2026/07/different.md"
+    with patch("backend.routers.host_agent.stream_host_agent_query", fake_stream):
+        with patch(
+            "backend.routers.host_agent.CLIAdapter.run_json",
+            new_callable=AsyncMock,
+            side_effect=[RuntimeError("missing journal"), {"success": True, "data": []}, mismatch],
+        ) as run_json:
+            response = client.post(
+                "/api/host-agent/query/stream",
+                json={"query": "body query"},
+                headers={"accept": "text/event-stream"},
+            )
+
+    final = json.loads(_parse_sse(response.text)[-1][1])
+    assert run_json.await_count == 3
+    assert final["mode"] == "UNGROUNDED"
+    assert final["reason"] == "native-markdown-no-verified-journal-evidence"
+    assert final["answer"]["summary"] == summary
+    assert final["evidence"] == []
+
+
+def test_native_markdown_mixed_valid_and_invalid_candidates_is_partial(monkeypatch):
+    monkeypatch.setenv("LIFE_INDEX_HOST_AGENT_URL", "http://host-agent.invalid")
+    valid_id = "2026/07/life-index_2026-07-22_010"
+    summary = (
+        f"[verified](/journal/{valid_id}) "
+        "[traversal](/journal/../private) "
+        "[query](/journal/2026/07/fake?raw=1)"
+    )
+
+    async def fake_stream(_payload):
+        yield {"type": "final", "data": _native_query_envelope(summary)}
+
+    with patch("backend.routers.host_agent.stream_host_agent_query", fake_stream):
+        with patch(
+            "backend.routers.host_agent.CLIAdapter.run_json",
+            new_callable=AsyncMock,
+            return_value=_journal_get_payload(valid_id),
+        ) as run_json:
+            response = client.post(
+                "/api/host-agent/query/stream",
+                json={"query": "body query"},
+                headers={"accept": "text/event-stream"},
+            )
+
+    final = json.loads(_parse_sse(response.text)[-1][1])
+    assert run_json.await_count == 1
+    assert final["mode"] == "PARTIAL"
+    assert final["reason"] == "some-native-markdown-journal-citations-rejected"
+    assert [item["id"] for item in final["evidence"]] == [valid_id]
+
+
+def test_native_markdown_without_journal_citation_is_ungrounded_without_cli(monkeypatch):
+    monkeypatch.setenv("LIFE_INDEX_HOST_AGENT_URL", "http://host-agent.invalid")
+    summary = "A native answer with [external context](https://example.com) and no journal citation."
+
+    async def fake_stream(_payload):
+        yield {"type": "final", "data": _native_query_envelope(summary)}
+
+    with patch("backend.routers.host_agent.stream_host_agent_query", fake_stream):
+        with patch("backend.routers.host_agent.CLIAdapter.run_json", new_callable=AsyncMock) as run_json:
+            response = client.post(
+                "/api/host-agent/query/stream",
+                json={"query": "body query"},
+                headers={"accept": "text/event-stream"},
+            )
+
+    final = json.loads(_parse_sse(response.text)[-1][1])
+    run_json.assert_not_awaited()
+    assert final["mode"] == "UNGROUNDED"
+    assert final["answer"]["summary"] == summary
+    assert final["evidence"] == []
+
+
+def test_native_markdown_candidates_are_deduplicated_and_bounded(monkeypatch):
+    monkeypatch.setenv("LIFE_INDEX_HOST_AGENT_URL", "http://host-agent.invalid")
+    ids = [f"2026/07/life-index_2026-07-22_{index:03d}" for index in range(1, 22)]
+    links = [f"[entry](/journal/{ids[0]})", f"[duplicate](/journal/{ids[0]})"]
+    links.extend(f"[entry {index}](/journal/{journal_id})" for index, journal_id in enumerate(ids[1:], 2))
+
+    async def fake_stream(_payload):
+        yield {"type": "final", "data": _native_query_envelope(" ".join(links))}
+
+    async def canonical_for_call(args, timeout=None):
+        del timeout
+        journal_id = args[3].removeprefix("Journals/").removesuffix(".md")
+        return _journal_get_payload(journal_id)
+
+    with patch("backend.routers.host_agent.stream_host_agent_query", fake_stream):
+        with patch(
+            "backend.routers.host_agent.CLIAdapter.run_json",
+            new_callable=AsyncMock,
+            side_effect=canonical_for_call,
+        ) as run_json:
+            response = client.post(
+                "/api/host-agent/query/stream",
+                json={"query": "body query"},
+                headers={"accept": "text/event-stream"},
+            )
+
+    final = json.loads(_parse_sse(response.text)[-1][1])
+    assert run_json.await_count == host_agent.MAX_NATIVE_JOURNAL_CANDIDATES
+    assert final["mode"] == "PARTIAL"
+    assert len(final["evidence"]) == host_agent.MAX_NATIVE_JOURNAL_CANDIDATES
+    assert len({item["id"] for item in final["evidence"]}) == host_agent.MAX_NATIVE_JOURNAL_CANDIDATES

@@ -52,6 +52,11 @@ ADAPTER_KIND_INVALID_REASON = "host-agent-adapter-kind-invalid"
 INVALID_ENVELOPE_REASON = "host-agent-envelope-invalid"
 DEFAULT_TIMEOUT_SECONDS = 600.0
 PROCESS_CLEANUP_WAIT_SECONDS = 0.75
+QUERY_OUTPUT_MODE_ENV = "LIFE_INDEX_HOST_AGENT_QUERY_OUTPUT_MODE"
+NATIVE_MARKDOWN_OUTPUT_MODE = "native-markdown"
+EXACT_JSON_OUTPUT_MODE = "exact-json"
+INVALID_QUERY_OUTPUT_MODE_REASON = "host-agent-query-output-mode-invalid"
+RESERVED_QUERY_FIELDS = frozenset({"answer_origin"})
 PROMPT_DIR = Path(__file__).with_name("prompts")
 DEFAULT_QUERY_PROMPT_TEMPLATE = """You are the user-provided Host Agent for Life Index GUI Handoff.
 Return only a JSON object matching schema_version gui.host_agent.query_response.v1.
@@ -59,10 +64,25 @@ $tool_hint
 Request JSON:
 $request_json
 """
+DEFAULT_NATIVE_QUERY_PROMPT_TEMPLATE = """You are the user-provided Host Agent for Life Index GUI Handoff.
+Use the Life Index tools available to you to answer the user's query.
+Return the answer as natural language or Markdown. If you cite a journal, use a canonical
+GUI link in the form [label](/journal/safe/id). Do not write or edit journal data.
+$tool_hint
+Query:
+$query
+"""
 DEFAULT_METADATA_PROMPT_TEMPLATE = """You are the user-provided Host Agent for Life Index metadata proposal.
-Return only a JSON object matching schema_version gui.host_agent.metadata_proposal.v1.
+Return only the exact v1 JSON object matching schema_version gui.host_agent.metadata_proposal.v1.
 The fields map accepts exactly: title, abstract, project, topics, moods, people, tags, links.
 Use plural topics and moods in the envelope. Unknown field keys (including weather) are protocol errors.
+Propose every canonical field that the draft content or existing metadata reliably supports; do not omit a supported field merely because it is optional.
+The title value must be 1-20 characters, concise, and grounded in the draft.
+You must count the characters in the final title value before returning the JSON.
+If it exceeds 20 characters, semantically compress it (for example, remove redundant modifiers), shorten it and count again until it is 20 characters or fewer. Never return an overlong title.
+When the draft supports tags, propose 1-5 reusable keywords or themes.
+For people, include every person explicitly named in the draft.
+When a field has no grounded support, leave it empty; never invent metadata.
 $tool_hint
 Request JSON:
 $request_json
@@ -147,7 +167,19 @@ def _render_prompt_template(
     return template.safe_substitute(
         tool_hint=_tool_hint_section().rstrip(),
         request_json=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        query=str(payload.get("query") or ""),
     )
+
+
+def _query_output_mode() -> str:
+    """Select the opt-in query framing without affecting metadata or named adapters."""
+
+    value = os.environ.get(QUERY_OUTPUT_MODE_ENV, "").strip().lower()
+    if not value or value == EXACT_JSON_OUTPUT_MODE:
+        return EXACT_JSON_OUTPUT_MODE
+    if value == NATIVE_MARKDOWN_OUTPUT_MODE:
+        return NATIVE_MARKDOWN_OUTPUT_MODE
+    raise ValueError(INVALID_QUERY_OUTPUT_MODE_REASON)
 
 
 def _build_runtime_env() -> dict[str, str]:
@@ -386,6 +418,12 @@ def _attach_codex_diagnostics(payload: dict[str, Any], diagnostics: dict[str, An
     return next_payload
 
 
+def _without_reserved_query_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove bridge-owned query fields from untrusted runtime output."""
+
+    return {key: value for key, value in payload.items() if key not in RESERVED_QUERY_FIELDS}
+
+
 def _validate_codex_query_payload(
     request: BridgeQueryRequest,
     payload: object,
@@ -396,7 +434,7 @@ def _validate_codex_query_payload(
         return _unavailable_query_for_codex(
             request, INVALID_ENVELOPE_REASON, {"stage": "codex-result-validate", **safe_diagnostics}
         )
-    candidate = _attach_codex_diagnostics(payload, safe_diagnostics)
+    candidate = _without_reserved_query_fields(_attach_codex_diagnostics(payload, safe_diagnostics))
     try:
         validate_query_response(candidate)
         json.dumps(candidate, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
@@ -434,6 +472,13 @@ def _validate_codex_metadata_payload(
 
 def _query_prompt(request: BridgeQueryRequest) -> str:
     payload = request.model_dump()
+    if _query_output_mode() == NATIVE_MARKDOWN_OUTPUT_MODE:
+        return _render_prompt_template(
+            "query-native.md",
+            "LIFE_INDEX_HOST_AGENT_QUERY_NATIVE_PROMPT_TEMPLATE",
+            DEFAULT_NATIVE_QUERY_PROMPT_TEMPLATE,
+            payload,
+        )
     return _render_prompt_template(
         "query.md",
         "LIFE_INDEX_HOST_AGENT_QUERY_PROMPT_TEMPLATE",
@@ -768,11 +813,12 @@ async def _run_runtime_stream(prompt: str) -> AsyncIterator[tuple[str, dict[str,
 
 
 def _validate_query_payload(payload: dict[str, Any], request: BridgeQueryRequest) -> dict[str, Any]:
-    """Validate a complete query envelope without mutating it."""
+    """Validate an exact-json envelope after removing bridge-owned fields."""
 
     del request  # request identity is preserved only by unavailable helpers.
-    validate_query_response(payload)
-    return payload
+    candidate = _without_reserved_query_fields(payload)
+    validate_query_response(candidate)
+    return candidate
 
 
 def _validate_metadata_payload(payload: dict[str, Any], request: BridgeMetadataRequest) -> dict[str, Any]:
@@ -811,6 +857,37 @@ def _unavailable_query_response(
         "evidence": [],
         "tool_trace": trace,
     }
+
+
+def _native_markdown_query_response(
+    request: BridgeQueryRequest,
+    summary: str,
+) -> dict[str, Any]:
+    """Wrap provider-neutral native text in the existing v1 terminal envelope."""
+
+    reason = "native-markdown-evidence-not-yet-verified"
+    payload = {
+        "schema_version": QUERY_SCHEMA,
+        "request_id": request.request_id or str(uuid.uuid4()),
+        "conversation_id": request.conversation_id,
+        "source": "host-agent",
+        "mode": "UNGROUNDED",
+        "reason": reason,
+        "query": request.query,
+        "answer": {
+            "mode": "UNGROUNDED",
+            "reason": reason,
+            "summary": summary,
+            "insights": [],
+            "gap": "Journal evidence has not yet been independently verified.",
+            "suggestions": [],
+        },
+        "evidence": [],
+        "tool_trace": [],
+        "answer_origin": NATIVE_MARKDOWN_OUTPUT_MODE,
+    }
+    validate_query_response(payload)
+    return payload
 
 
 def _metadata_failure_diagnostics(
@@ -983,6 +1060,15 @@ async def query_stream(request: BridgeQueryRequest) -> StreamingResponse:
             yield _sse_frame("final", payload)
             return
 
+        try:
+            output_mode = _query_output_mode()
+        except ValueError:
+            yield _sse_frame(
+                "final",
+                _unavailable_query_response(request, INVALID_QUERY_OUTPUT_MODE_REASON),
+            )
+            return
+
         runtime_result: RuntimeResult | None = None
         try:
             async for event_type, data in _run_runtime_stream(_query_prompt(request)):
@@ -1004,6 +1090,16 @@ async def query_stream(request: BridgeQueryRequest) -> StreamingResponse:
             return
         if runtime_result.returncode != 0:
             yield _sse_frame("final", _unavailable_query_response(request, "host-agent-runtime-failed", runtime_result))
+            return
+
+        if output_mode == NATIVE_MARKDOWN_OUTPUT_MODE:
+            if not runtime_result.stdout.strip():
+                yield _sse_frame(
+                    "final",
+                    _unavailable_query_response(request, "host-agent-runtime-empty", runtime_result),
+                )
+                return
+            yield _sse_frame("final", _native_markdown_query_response(request, runtime_result.stdout))
             return
 
         try:

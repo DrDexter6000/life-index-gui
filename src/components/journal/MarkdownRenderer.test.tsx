@@ -48,6 +48,32 @@ describe('MarkdownRenderer', () => {
     expect(link.getAttribute('href')).toBe('https://example.com');
   });
 
+  it('preserves canonical journal routes and can restrict them to a verified allowlist', () => {
+    const verified = '/journal/2026/07/life-index_2026-07-22_001';
+    const unverified = '/journal/2026/07/life-index_2026-07-22_002';
+    render(
+      <MarkdownRenderer
+        content={`[verified](${verified}) [unverified](${unverified})`}
+        allowedJournalHrefs={new Set([verified])}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: 'verified' })).toHaveAttribute('href', verified);
+    expect(screen.getByText('unverified').closest('a')).toBeNull();
+  });
+
+  it('keeps external links clickable when journal links are restricted', () => {
+    render(
+      <MarkdownRenderer
+        content="[external](https://example.com) [invalid journal](/journal/../secret)"
+        allowedJournalHrefs={new Set()}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: /external/ })).toHaveAttribute('href', 'https://example.com');
+    expect(screen.getByText('invalid journal').closest('a')).toBeNull();
+  });
+
   it('sanitizes dangerous links (javascript: URI)', () => {
     render(<MarkdownRenderer content="[evil](javascript:alert(1))" />);
     const link = document.querySelector('a');

@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [0.5.3] - 2026-07-22
+
+### What users get
+- With an already available Hermes connection, AI+ smart search preserves its native natural-language and Markdown answers while presenting CLI-verified journal evidence as clickable links.
+- AI+ journal fill places proposed title, abstract, topics, moods, tags, people, and project values into ordinary editable inputs. Successful fields remain usable when another field fails.
+- Applying AI+ suggestions does not auto-save and does not overwrite existing or in-flight user values.
+- AI+ execution details start collapsed, and the AI+ status identity is cyan.
+
+### Included in this release
+- Native smart-search answer preservation with clickable CLI-verified evidence.
+- Field-level partial success for editable metadata proposals, with existing and in-flight value protection.
+- Collapsed AI+ execution details and cyan AI+ status identity.
+- This release does not install, configure, upgrade, repair, or manage Hermes or another host runtime, and does not add ACP/MCP, tunnels, credentials, or new protocols.
+
 ## [0.5.2] - 2026-07-21
 
 ### What users get

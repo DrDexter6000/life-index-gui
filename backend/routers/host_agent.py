@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from backend.adapter.cli_adapter import CLIAdapter
 from backend.models.response import APIResponse
 from host_agent_bridge.contracts import (
     HEALTH_SCHEMA,
@@ -33,6 +34,10 @@ router = APIRouter(prefix="/host-agent", tags=["host-agent"])
 UNCONFIGURED_REASON = "host-agent-unconfigured"
 INVALID_ENVELOPE_REASON = "host-agent-envelope-invalid"
 DEFAULT_HOST_AGENT_HTTP_TIMEOUT_SECONDS = 600.0
+NATIVE_MARKDOWN_OUTPUT_MODE = "native-markdown"
+MAX_NATIVE_JOURNAL_CANDIDATES = 20
+_MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]\r\n]*\]\(([^)\r\n]*)\)")
+_SAFE_JOURNAL_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 NOT_READY_CHECK_STATUSES = {
     "building",
     "degraded",
@@ -79,6 +84,136 @@ def host_agent_http_timeout_seconds() -> float:
     except ValueError:
         return DEFAULT_HOST_AGENT_HTTP_TIMEOUT_SECONDS
     return max(1.0, timeout)
+
+
+def _journal_id_from_native_href(href: str) -> str | None:
+    """Accept only canonical GUI journal routes; never decode or repair paths."""
+
+    if href != href.strip() or not href.startswith("/journal/"):
+        return None
+    journal_id = href.removeprefix("/journal/")
+    if (
+        not journal_id
+        or "\\" in journal_id
+        or "?" in journal_id
+        or "#" in journal_id
+        or "%" in journal_id
+        or ":" in journal_id
+    ):
+        return None
+    segments = journal_id.split("/")
+    if not segments or any(_SAFE_JOURNAL_SEGMENT_RE.match(segment) is None for segment in segments):
+        return None
+    return journal_id
+
+
+def _native_markdown_journal_candidates(summary: str) -> tuple[list[str], bool]:
+    """Return bounded, deduplicated candidates and whether any link was rejected."""
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    rejected = False
+    for match in _MARKDOWN_LINK_RE.finditer(summary):
+        href = match.group(1)
+        if not href.startswith("/journal"):
+            continue
+        journal_id = _journal_id_from_native_href(href)
+        if journal_id is None:
+            rejected = True
+            continue
+        if journal_id in seen:
+            continue
+        seen.add(journal_id)
+        if len(candidates) >= MAX_NATIVE_JOURNAL_CANDIDATES:
+            rejected = True
+            continue
+        candidates.append(journal_id)
+    return candidates, rejected
+
+
+def _canonical_evidence_from_journal_payload(
+    payload: object,
+    journal_id: str,
+) -> dict[str, str] | None:
+    """Project only canonical journal identity fields; content is never returned."""
+
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("success") is not True or payload.get("schema_version") != "m16.journal.v0":
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    expected_rel_path = f"Journals/{journal_id}.md"
+    if data.get("rel_path") != expected_rel_path:
+        return None
+    metadata = data.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    title = data.get("title") or metadata.get("title")
+    date = data.get("date") or metadata.get("date")
+    if not isinstance(title, str) or not title.strip():
+        return None
+    if not isinstance(date, str) or not date.strip():
+        return None
+    return {
+        "id": journal_id,
+        "rel_path": expected_rel_path,
+        "title": title.strip(),
+        "date": date.strip(),
+    }
+
+
+async def _verify_native_markdown_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+    """Label native answers from independent CLI reads without gating their text."""
+
+    answer = payload.get("answer")
+    if not isinstance(answer, dict) or not isinstance(answer.get("summary"), str):
+        return payload
+
+    candidates, rejected = _native_markdown_journal_candidates(answer["summary"])
+    evidence: list[dict[str, str]] = []
+    cli = CLIAdapter()
+    for journal_id in candidates:
+        try:
+            journal_payload = await cli.run_json(
+                [
+                    "journal",
+                    "get",
+                    "--path",
+                    f"Journals/{journal_id}.md",
+                    "--json",
+                ],
+                timeout=30.0,
+            )
+        except Exception:
+            rejected = True
+            continue
+        canonical = _canonical_evidence_from_journal_payload(journal_payload, journal_id)
+        if canonical is None:
+            rejected = True
+            continue
+        evidence.append(canonical)
+
+    if evidence and not rejected:
+        mode = "GROUNDED"
+        reason = "all-native-markdown-journal-citations-verified"
+        gap = None
+    elif evidence:
+        mode = "PARTIAL"
+        reason = "some-native-markdown-journal-citations-rejected"
+        gap = "Some journal citations could not be independently verified."
+    else:
+        mode = "UNGROUNDED"
+        reason = "native-markdown-no-verified-journal-evidence"
+        gap = "No journal citations were independently verified."
+
+    normalized = dict(payload)
+    normalized.pop("answer_origin", None)
+    normalized_answer = dict(answer)
+    normalized.update({"mode": mode, "reason": reason, "evidence": evidence, "tool_trace": []})
+    normalized_answer.update({"mode": mode, "reason": reason, "gap": gap})
+    normalized["answer"] = normalized_answer
+    return normalized
 
 
 def unavailable_health(reason: str = UNCONFIGURED_REASON) -> dict[str, Any]:
@@ -422,6 +557,18 @@ async def stream_host_agent_query_route(body: HostAgentQueryRequest):
                                 invalid_request_id,
                                 reason=INVALID_ENVELOPE_REASON,
                             )
+                        else:
+                            if data.get("answer_origin") == NATIVE_MARKDOWN_OUTPUT_MODE:
+                                data = await _verify_native_markdown_evidence(data)
+                                try:
+                                    validate_query_response(data)
+                                except ValueError:
+                                    data = unavailable_query_response(
+                                        query,
+                                        body.conversation_id,
+                                        body.request_id,
+                                        reason=INVALID_ENVELOPE_REASON,
+                                    )
                     else:
                         data = unavailable_query_response(
                             query,

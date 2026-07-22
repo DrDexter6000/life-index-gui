@@ -835,7 +835,7 @@ export const hostAgentAPI = {
     return parseData(HostAgentHealthResponseSchema, raw);
   },
 
-  /** Request host-agent metadata proposals; GUI applies nothing automatically. */
+  /** Request host-agent metadata proposals; GUI may safely fill unchanged empty draft fields only. */
   proposeMetadata: async (
     request: HostAgentMetadataProposalRequest,
   ): Promise<HostAgentMetadataProposal> => {

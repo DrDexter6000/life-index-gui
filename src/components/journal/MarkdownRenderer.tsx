@@ -3,6 +3,7 @@ import { attachmentUrl } from '@/lib/attachments';
 
 interface MarkdownRendererProps {
   content: string;
+  allowedJournalHrefs?: ReadonlySet<string>;
 }
 
 /**
@@ -10,7 +11,7 @@ interface MarkdownRendererProps {
  * Supports headings, emphasis, links, images, code, lists, blockquotes.
  * Attachment links are rewritten to use the download API endpoint.
  */
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, allowedJournalHrefs }: MarkdownRendererProps) {
   const parseMarkdown = (text: string): string => {
     let html = text
       // Escape HTML entities
@@ -37,7 +38,11 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
       .replace(/^&gt; (.*$)/gim, '<blockquote class="border-l-4 pl-4 py-1 my-4 bg-[var(--color-ether-surface-ghost)] rounded-r-lg italic" style="border-left-color: var(--color-gold); color: var(--color-muted)">$1</blockquote>')
       // Links — detect attachments and add download styling
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
-        const resolved = attachmentUrl(url);
+        const isJournal = url === '/journal' || url.startsWith('/journal/');
+        if (isJournal && allowedJournalHrefs && !allowedJournalHrefs.has(url)) {
+          return label;
+        }
+        const resolved = isJournal ? url : attachmentUrl(url);
         const isAttachment = resolved.startsWith('/api/attachments/');
         const isExternal = url.startsWith('http://') || url.startsWith('https://');
         const icon = isAttachment

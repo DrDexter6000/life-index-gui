@@ -479,7 +479,7 @@ describe('TheCore', () => {
       });
     });
 
-    it('keeps metadata proposal and acceptance outside the journal write boundary until normal save', async () => {
+    it('keeps metadata auto-fill outside the journal write boundary until normal save', async () => {
       mockUseDashboardStats.mockReturnValue({
         data: { totalJournals: 5 },
         isLoading: false,
@@ -508,13 +508,8 @@ describe('TheCore', () => {
 
       fireEvent.click(proposeButton);
       await waitFor(() => expect(mockHostAgentAPI.proposeMetadata).toHaveBeenCalledTimes(1));
-      await waitFor(() => expect(screen.getByTestId('metadata-proposal-panel')).toBeInTheDocument());
-
-      expect(mockJournalAPI.create).not.toHaveBeenCalled();
-      expect(mockJournalAPI.update).not.toHaveBeenCalled();
-
-      fireEvent.click(screen.getByTestId('metadata-proposal-accept-project'));
       await waitFor(() => expect(document.querySelector<HTMLInputElement>('#metadata-project')).toHaveValue('Proposed project'));
+
       expect(mockJournalAPI.create).not.toHaveBeenCalled();
       expect(mockJournalAPI.update).not.toHaveBeenCalled();
 

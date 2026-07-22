@@ -36,6 +36,28 @@ Any other value is invalid and fails closed as `UNAVAILABLE`. The
 `reference-command` path remains the provider-neutral default used by the
 stdio-json and command-json examples.
 
+For `reference-command` query calls, stdout framing is selected separately:
+
+```text
+LIFE_INDEX_HOST_AGENT_QUERY_OUTPUT_MODE=exact-json       # default
+LIFE_INDEX_HOST_AGENT_QUERY_OUTPUT_MODE=native-markdown  # explicit opt-in
+```
+
+`native-markdown` is query-only and provider-neutral. A successful non-empty
+runtime stdout becomes `answer.summary` verbatim; the bridge supplies the v1
+request/conversation/source/query fields and an initial ungrounded verifier
+state. JSON-looking text and fenced JSON remain answer text. Invalid non-empty
+mode values fail closed. This setting never changes metadata proposals or the
+named Codex adapter, which retain their strict structured outputs.
+
+The GUI backend treats only ordinary Markdown links of the form
+`[label](/journal/<safe-id>)` as untrusted evidence candidates. It verifies a
+bounded, deduplicated set independently through
+`life-index journal get --path Journals/<id>.md --json` and rebuilds evidence
+only from canonical `rel_path`, `title`, and `date`. All verified candidates are
+`GROUNDED`; mixed accepted/rejected candidates are `PARTIAL`; no verified
+candidate is `UNGROUNDED`. Verification labels do not remove the native answer.
+
 ### Named Codex CLI support matrix
 
 | Surface | D2 support | Boundary |
@@ -202,6 +224,12 @@ Final response schema:
 or runtime capability is insufficient; they carry no additional evidence
 requirement.
 
+Within `answer.summary`, an internal `/journal/...` link is clickable only when
+the final `evidence` array contains the corresponding independently verified
+journal id. Unverified or malformed internal journal links render as text;
+ordinary external HTTP(S) Markdown links remain links but never count as
+evidence.
+
 ### POST /metadata/propose
 
 Consumes a draft and returns a `gui.host_agent.metadata_proposal.v1` envelope.
@@ -246,7 +274,14 @@ Response:
 }
 ```
 
-The Host Agent must respect `policy.preserve_user_fields=true`. The GUI should present proposals, not silently overwrite user-authored metadata.
+The Host Agent must respect `policy.preserve_user_fields=true`. After an
+explicit request, the GUI may apply a proposal directly to the editable draft
+only when that target was empty in the request snapshot, is still equal to
+that empty value, and the normalized proposal is non-empty. Existing values
+and edits made while the request is pending always win. This updates draft
+state only: normal journal Save remains the sole persistence action. Successful
+execution/provenance detail is collapsed behind the fill-status control by
+default.
 
 The metadata `fields` map accepts exactly these v1 keys: `title`, `abstract`,
 `project`, `topics`, `moods`, `people`, `tags`, and `links`. `topics` and

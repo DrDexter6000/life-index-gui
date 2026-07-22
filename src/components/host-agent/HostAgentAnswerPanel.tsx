@@ -198,6 +198,14 @@ export function HostAgentAnswerPanel({ response, onContinueSearch }: HostAgentAn
     () => response.evidence.map((item) => item.id).filter(Boolean).join('|'),
     [response.evidence],
   );
+  const verifiedJournalHrefs = useMemo(() => {
+    const hrefs = new Set<string>();
+    response.evidence.forEach((item) => {
+      const href = evidenceHref(item.id);
+      if (href) hrefs.add(href);
+    });
+    return hrefs;
+  }, [response.evidence]);
 
   useEffect(() => {
     const scrollToAnswer = () => {
@@ -643,7 +651,7 @@ export function HostAgentAnswerPanel({ response, onContinueSearch }: HostAgentAn
         </h4>
         {summary ? (
           <div data-testid="host-agent-answer">
-            <MarkdownRenderer content={summary} />
+            <MarkdownRenderer content={summary} allowedJournalHrefs={verifiedJournalHrefs} />
           </div>
         ) : (
           <p

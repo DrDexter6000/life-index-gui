@@ -34,10 +34,12 @@ acceptance. A future Codex version, authentication mode, or permission-contract
 change requires a new compatibility review.
 
 **CURRENT — D3 deterministic GUI core:** Archives uses deterministic
-health/aggregate/Index Tree contracts; metadata remains proposal-only until
-explicit consent and normal Save, Host Agent terminality and safe evidence
-navigation are retained, and journal editing stays in detail context through
-the existing write authority. The D3 product DoD is accepted as `GO`.
+health/aggregate/Index Tree contracts; an explicit metadata proposal request
+may fill only draft targets that were empty at request time and remain
+unchanged, while persistence still requires normal Save. Host Agent terminality
+and safe evidence navigation are retained, and journal editing stays in detail
+context through the existing write authority. The D3 product DoD is accepted
+as `GO`.
 
 **CURRENT — D4 corrected GO/accepted:** The accepted runtime includes the direct
 GUI → CLI/Core production route plus the optional exact-three generic MCP
