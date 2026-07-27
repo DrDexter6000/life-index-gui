@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [0.5.4] - 2026-07-27
+
+### What users get
+- Daily startup now reports GUI and AI+ readiness truthfully: an explicitly configured Host Agent bridge is preserved, while an unknown process on the bundled bridge port leaves AI+ safely offline without taking down the GUI.
+- The GUI exposes only usable actions: Import is clearly marked Coming Soon, dates without journals are not clickable, and the duplicate continuation entry is gone while full-entry editing remains available.
+- Archive navigation opens the intended journal date, and journal images can be previewed inside the app, closed on desktop or mobile, and downloaded in their original form.
+
+### Included in this release
+- Ownership-safe reference bridge startup and cleanup, with fail-closed handling for unknown or replaced port owners.
+- Honest daily GUI/AI+ readiness across bundled and user-configured Host Agent bridges.
+- Import, editing-entry, and empty-calendar cleanup for the public navigation surface.
+- In-app journal image preview with responsive controls and original-file download.
+
 ## [0.5.3] - 2026-07-22
 
 ### What users get

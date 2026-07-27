@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { journalAPI, type HostAgentQueryResponse, type JournalAttachment } from '@/lib/api-client';
 import { attachmentUrl } from '@/lib/attachments';
-import { diagnoseMediaLoadFailure, type MediaLoadDiagnostic } from '@/lib/media-diagnostics';
 import { MarkdownRenderer } from '@/components/journal/MarkdownRenderer';
+import {
+  MediaLightbox,
+  type MediaLightboxAttachment,
+} from '@/components/journal/MediaLightbox';
 import { useTranslation } from '@/hooks/useTranslation';
 
 export interface HostAgentAnswerPanelProps {
@@ -13,8 +15,7 @@ export interface HostAgentAnswerPanelProps {
 
 type BadgeTone = 'positive' | 'warning' | 'neutral' | 'disabled';
 type EvidenceItem = HostAgentQueryResponse['evidence'][number];
-type MediaAttachment = JournalAttachment & { kind: 'image' | 'video' };
-type LightboxDiagnostic = MediaLoadDiagnostic | { layer: 'checking'; status: null; url: string };
+type MediaAttachment = MediaLightboxAttachment;
 
 const MODE_TONES: Record<string, BadgeTone> = {
   GROUNDED: 'positive',
@@ -122,27 +123,6 @@ function scrollToAnswerStart(panel: HTMLElement) {
   panel.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
 }
 
-function diagnosticTextKey(layer: LightboxDiagnostic['layer']): string {
-  switch (layer) {
-    case 'checking':
-      return 'hostAgentMediaDiagnosticChecking';
-    case 'backend':
-      return 'hostAgentMediaDiagnosticBackend';
-    case 'tunnel':
-      return 'hostAgentMediaDiagnosticTunnel';
-    case 'browser':
-      return 'hostAgentMediaDiagnosticBrowser';
-    case 'network':
-      return 'hostAgentMediaDiagnosticNetwork';
-    case 'http':
-      return 'hostAgentMediaDiagnosticHttp';
-    case 'unknown':
-      return 'hostAgentMediaDiagnosticUnknown';
-    default:
-      return 'hostAgentMediaDiagnosticUnknown';
-  }
-}
-
 function toneStyle(tone: BadgeTone): CSSProperties {
   switch (tone) {
     case 'positive':
@@ -177,11 +157,6 @@ export function HostAgentAnswerPanel({ response, onContinueSearch }: HostAgentAn
   const panelRef = useRef<HTMLElement | null>(null);
   const [mediaByEvidenceId, setMediaByEvidenceId] = useState<Record<string, MediaAttachment[]>>({});
   const [lightboxAttachment, setLightboxAttachment] = useState<MediaAttachment | null>(null);
-  const [lightboxLoaded, setLightboxLoaded] = useState(false);
-  const [lightboxError, setLightboxError] = useState(false);
-  const [lightboxRetryKey, setLightboxRetryKey] = useState(0);
-  const [lightboxUseOriginal, setLightboxUseOriginal] = useState(false);
-  const [lightboxDiagnostic, setLightboxDiagnostic] = useState<LightboxDiagnostic | null>(null);
   const [failedThumbnailPaths, setFailedThumbnailPaths] = useState<Set<string>>(() => new Set());
   const mode = response.mode || response.answer?.mode || 'UNKNOWN';
   const reason = response.reason || response.answer?.reason || '';
@@ -288,58 +263,13 @@ export function HostAgentAnswerPanel({ response, onContinueSearch }: HostAgentAn
     setFailedThumbnailPaths(new Set());
   }, [evidenceIds]);
 
-  useEffect(() => {
-    if (!lightboxAttachment) return undefined;
-    setLightboxLoaded(false);
-    setLightboxError(false);
-    setLightboxDiagnostic(null);
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [lightboxAttachment]);
-
   const openLightbox = (attachment: MediaAttachment) => {
-    setLightboxLoaded(false);
-    setLightboxError(false);
-    setLightboxRetryKey(0);
-    setLightboxUseOriginal(false);
-    setLightboxDiagnostic(null);
     setLightboxAttachment(attachment);
   };
 
-  const closeLightbox = () => {
+  const closeLightbox = useCallback(() => {
     setLightboxAttachment(null);
-    setLightboxLoaded(false);
-    setLightboxError(false);
-    setLightboxUseOriginal(false);
-    setLightboxDiagnostic(null);
-  };
-
-  const handleLightboxMediaError = () => {
-    setLightboxLoaded(false);
-    setLightboxError(true);
-    const failedUrl = lightboxMediaUrl;
-    setLightboxDiagnostic({ layer: 'checking', status: null, url: failedUrl });
-    void diagnoseMediaLoadFailure(failedUrl).then((diagnostic) => {
-      setLightboxDiagnostic((current) => (current?.url === failedUrl ? diagnostic : current));
-    });
-  };
-
-  const retryLightboxMedia = () => {
-    setLightboxLoaded(false);
-    setLightboxError(false);
-    setLightboxDiagnostic(null);
-    setLightboxRetryKey((key) => key + 1);
-  };
-
-  const showOriginalLightboxImage = () => {
-    setLightboxLoaded(false);
-    setLightboxError(false);
-    setLightboxDiagnostic(null);
-    setLightboxUseOriginal(true);
-  };
+  }, []);
 
   const markThumbnailFailed = (relPath: string) => {
     setFailedThumbnailPaths((current) => {
@@ -348,135 +278,6 @@ export function HostAgentAnswerPanel({ response, onContinueSearch }: HostAgentAn
       return next;
     });
   };
-
-  const lightboxDownloadUrl = lightboxAttachment ? attachmentUrl(lightboxAttachment.relPath) : '';
-  const lightboxMediaUrl = lightboxAttachment?.kind === 'image' && !lightboxUseOriginal
-    ? attachmentUrl(lightboxAttachment.relPath, { variant: 'preview', maxPx: 1400 })
-    : lightboxDownloadUrl;
-  const lightboxErrorTitle = lightboxAttachment?.kind === 'image' && !lightboxUseOriginal
-    ? t('hostAgentMediaPreviewFailed')
-    : t('hostAgentMediaLoadFailed');
-
-  const lightbox = lightboxAttachment && typeof document !== 'undefined'
-    ? createPortal(
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={lightboxAttachment.filename}
-        className="fixed inset-0 z-[9999] flex min-h-dvh items-center justify-center bg-black/85 p-3 sm:p-5"
-        data-testid="host-agent-media-lightbox"
-        onClick={closeLightbox}
-      >
-        <div
-          className="flex max-h-[92dvh] w-full max-w-[94vw] flex-col items-center sm:max-w-[720px]"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div
-            className="relative flex min-h-[240px] w-full items-center justify-center sm:min-h-[320px]"
-            data-testid="host-agent-media-lightbox-frame"
-          >
-            {!lightboxLoaded && !lightboxError && (
-              <div
-                className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-black/45 text-xs text-[var(--color-primary)]"
-                data-testid="host-agent-media-loading"
-                style={{ fontFamily: 'var(--font-order)' }}
-              >
-                {t('hostAgentMediaLoading')}
-              </div>
-            )}
-            {lightboxError && (
-              <div
-                className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-xl bg-black/60 px-5 text-center text-xs text-[var(--color-primary)]"
-                data-testid="host-agent-media-error"
-                style={{ fontFamily: 'var(--font-order)' }}
-              >
-                <span className="text-[0.84rem] text-[var(--color-primary)]">{lightboxErrorTitle}</span>
-                {lightboxDiagnostic && (
-                  <>
-                    <span className="max-w-[min(78vw,520px)] text-[var(--color-muted)]">
-                      {t(diagnosticTextKey(lightboxDiagnostic.layer), {
-                        status: lightboxDiagnostic.status ?? '',
-                      })}
-                    </span>
-                    <span
-                      className="max-w-[min(78vw,520px)] truncate text-[0.65rem] text-[var(--color-secondary)]"
-                      data-testid="host-agent-media-diagnostic-url"
-                    >
-                      {t('hostAgentMediaDiagnosticUrl', { url: lightboxDiagnostic.url })}
-                    </span>
-                  </>
-                )}
-                <button
-                  type="button"
-                  className="rounded-full border border-[var(--color-cyan)]/35 px-3 py-1 text-[var(--color-cyan)]"
-                  aria-label={t('hostAgentMediaRetryAria')}
-                  onClick={retryLightboxMedia}
-                >
-                  {t('hostAgentMediaRetry')}
-                </button>
-              </div>
-            )}
-            {lightboxAttachment.kind === 'image' ? (
-              <img
-                key={`image-${lightboxUseOriginal ? 'original' : 'preview'}-${lightboxRetryKey}`}
-                src={lightboxMediaUrl}
-                alt={lightboxAttachment.filename}
-                data-testid="host-agent-media-lightbox-image"
-                loading="eager"
-                onLoad={() => setLightboxLoaded(true)}
-                onError={handleLightboxMediaError}
-                className={`max-h-[84dvh] max-w-full rounded-xl object-contain transition-opacity duration-200 ${lightboxLoaded ? 'opacity-100' : 'opacity-0'}`}
-              />
-            ) : (
-              <video
-                key={`video-${lightboxRetryKey}`}
-                controls
-                autoPlay
-                playsInline
-                preload="metadata"
-                data-testid="host-agent-media-lightbox-video"
-                onLoadedData={() => setLightboxLoaded(true)}
-                onError={handleLightboxMediaError}
-                className={`max-h-[84dvh] max-w-full rounded-xl bg-black transition-opacity duration-200 ${lightboxLoaded ? 'opacity-100' : 'opacity-0'}`}
-              >
-                <source src={lightboxDownloadUrl} type={lightboxAttachment.contentType} />
-              </video>
-            )}
-          </div>
-          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-            {lightboxAttachment.kind === 'image' && !lightboxUseOriginal && (
-              <button
-                type="button"
-                aria-label={t('hostAgentMediaViewOriginalAria', { filename: lightboxAttachment.filename })}
-                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-gold)]/30 bg-[var(--color-gold)]/10 px-3 py-2 text-xs text-[var(--color-primary)] shadow-[0_0_22px_rgba(245,214,122,0.10)] transition-colors hover:border-[var(--color-gold)]/55 hover:bg-[var(--color-gold)]/15"
-                onClick={showOriginalLightboxImage}
-              >
-                <span className="material-symbols-outlined text-[1rem] leading-none">open_in_full</span>
-                <span>{t('hostAgentMediaViewOriginal')}</span>
-              </button>
-            )}
-            <a
-              href={lightboxDownloadUrl}
-              download={lightboxAttachment.filename}
-              aria-label={t('hostAgentMediaDownloadAria', { filename: lightboxAttachment.filename })}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-cyan)]/35 bg-[var(--color-cyan)]/10 px-3 py-2 text-xs text-[var(--color-cyan)] shadow-[0_0_22px_rgba(106,255,246,0.10)] transition-colors hover:border-[var(--color-cyan)]/60 hover:bg-[var(--color-cyan)]/15"
-            >
-              <span className="material-symbols-outlined text-[1rem] leading-none">download</span>
-              <span>{t('hostAgentMediaDownload')}</span>
-            </a>
-            <button
-              type="button"
-              className="rounded-full border border-white/[0.14] bg-black/40 px-4 py-2 text-xs text-[var(--color-primary)] transition-colors hover:border-white/[0.24] hover:bg-white/[0.06]"
-              onClick={closeLightbox}
-            >
-              {t('hostAgentMediaClose')}
-            </button>
-          </div>
-        </div>
-      </div>,
-      document.body,
-    )
-    : null;
 
   return (
     <section
@@ -730,7 +531,9 @@ export function HostAgentAnswerPanel({ response, onContinueSearch }: HostAgentAn
         </p>
       )}
 
-      {lightbox}
+      {lightboxAttachment && (
+        <MediaLightbox attachment={lightboxAttachment} onClose={closeLightbox} />
+      )}
     </section>
   );
 }

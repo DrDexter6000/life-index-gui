@@ -10,11 +10,31 @@ import { checkDevEnvironment } from './require-dev-env.mjs';
 
 export const DEFAULT_BACKEND_PORT = 8000;
 export const DEFAULT_FRONTEND_PORT = 5173;
+export const REFERENCE_BRIDGE_PORT = 8791;
+export const REFERENCE_BRIDGE_URL = `http://127.0.0.1:${REFERENCE_BRIDGE_PORT}`;
 const OWNERSHIP_ENV = 'LIFE_INDEX_GUI_AGENT_OPS';
 const moduleRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BACKEND_PYTHON_SUPPORTED_RANGE = '3.11-3.13';
 const BACKEND_PYTHON_MIN = { major: 3, minor: 11 };
 const BACKEND_PYTHON_MAX = { major: 3, minor: 13 };
+
+function isTrustedReferenceBridge(referenceBridge) {
+  return referenceBridge?.bridgeReady === true
+    && ['spawned-ready', 'reused-ready'].includes(referenceBridge.status);
+}
+
+export function createBackendChildEnv(callerEnv = {}, referenceBridge = null) {
+  const childEnv = { ...callerEnv };
+  if (String(callerEnv.LIFE_INDEX_HOST_AGENT_URL ?? '').trim()) {
+    return childEnv;
+  }
+
+  delete childEnv.LIFE_INDEX_HOST_AGENT_URL;
+  if (isTrustedReferenceBridge(referenceBridge)) {
+    childEnv.LIFE_INDEX_HOST_AGENT_URL = REFERENCE_BRIDGE_URL;
+  }
+  return childEnv;
+}
 
 function commandName(name) {
   return process.platform === 'win32' && !name.endsWith('.cmd') ? `${name}.cmd` : name;
@@ -24,12 +44,41 @@ function normalizeText(value) {
   return String(value ?? '').replace(/\\/g, '/').toLowerCase();
 }
 
+function normalizePathForComparison(value, platform = process.platform) {
+  const raw = String(value ?? '');
+  const normalized = (platform === 'win32' ? raw.replace(/\\/g, '/') : raw)
+    .replace(/\/+$/, '');
+  return platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 function uniqueNumbers(values) {
   return [...new Set(values.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
 }
 
-function hasRepoRoot(commandLine, repoRoot) {
-  return normalizeText(commandLine).includes(normalizeText(repoRoot));
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasUniqueExactOptionPath(
+  commandLine,
+  option,
+  expectedPath,
+  platform = process.platform,
+) {
+  const rawCommandLine = String(commandLine ?? '');
+  const text = platform === 'win32'
+    ? rawCommandLine.replace(/\\/g, '/')
+    : rawCommandLine;
+  const path = normalizePathForComparison(expectedPath, platform);
+  const optionPattern = escapeRegExp(String(option));
+  const matcher = new RegExp(
+    `(?:^|\\s)${optionPattern}(?:\\s+|=)(?:"([^"]*)"|'([^']*)'|(\\S+))(?=$|\\s)`,
+    'gi',
+  );
+  const values = [...text.matchAll(matcher)].map(
+    (match) => normalizePathForComparison(match[1] ?? match[2] ?? match[3], platform),
+  );
+  return values.length === 1 && values[0] === path;
 }
 
 function hasPort(commandLine, port) {
@@ -37,26 +86,56 @@ function hasPort(commandLine, port) {
   return new RegExp(`(?:--port\\s+|:${port}\\b|\\b)${port}\\b`).test(text);
 }
 
-function isProjectOwnedProcess(processInfo, { repoRoot, role, port }) {
+function isProjectOwnedProcess(processInfo, {
+  repoRoot,
+  role,
+  port,
+  platform = process.platform,
+}) {
   const commandLine = processInfo?.commandLine ?? '';
   const text = normalizeText(commandLine);
-  if (!hasRepoRoot(commandLine, repoRoot) || !hasPort(commandLine, port)) {
+  if (!hasPort(commandLine, port)) {
     return false;
   }
   if (role === 'backend') {
-    return text.includes('uvicorn') && text.includes('backend.main:app');
+    return text.includes('uvicorn')
+      && text.includes('backend.main:app')
+      && hasUniqueExactOptionPath(commandLine, '--app-dir', repoRoot, platform);
   }
   if (role === 'frontend') {
-    return text.includes('vite') && (text.includes('vite.config.ts') || text.includes('/node_modules/vite/'));
+    const frontendConfigPath = `${String(repoRoot).replace(/[\\/]+$/, '')}/vite.config.ts`;
+    return text.includes('vite')
+      && hasUniqueExactOptionPath(
+        commandLine,
+        '--config',
+        frontendConfigPath,
+        platform,
+      );
+  }
+  if (role === 'reference-bridge') {
+    return text.includes('uvicorn')
+      && text.includes('host_agent_bridge.server:app')
+      && hasUniqueExactOptionPath(commandLine, '--app-dir', repoRoot, platform);
   }
   return false;
 }
 
-export function classifyPortOwners({ port, role, repoRoot, owners }) {
+export function classifyPortOwners({
+  port,
+  role,
+  repoRoot,
+  owners,
+  platform = process.platform,
+}) {
   const safeToStop = [];
   const blocked = [];
   for (const owner of owners) {
-    if (isProjectOwnedProcess(owner, { repoRoot, role, port })) {
+    if (isProjectOwnedProcess(owner, {
+      repoRoot,
+      role,
+      port,
+      platform,
+    })) {
       safeToStop.push(owner);
     } else {
       blocked.push(owner);
@@ -116,6 +195,28 @@ export function createLaunchCommands({
         join(root, 'vite.config.ts'),
       ],
     },
+  };
+}
+
+export function createReferenceBridgeLaunchCommand({
+  repoRoot = moduleRepoRoot,
+  port = REFERENCE_BRIDGE_PORT,
+  pythonCommand,
+} = {}) {
+  const root = resolve(repoRoot);
+  return {
+    command: pythonCommand ?? resolvePythonCommand({ repoRoot: root }),
+    args: [
+      '-m',
+      'uvicorn',
+      'host_agent_bridge.server:app',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      String(port),
+      '--app-dir',
+      root,
+    ],
   };
 }
 
@@ -412,6 +513,10 @@ function spawnTracked(command, args, { cwd, env, name }) {
     windowsHide: true,
   });
   child.output = { stdout: '', stderr: '' };
+  child.once('error', (error) => {
+    child.spawnError = error;
+    child.output.stderr = tailText(`${child.output.stderr}\n${error?.message ?? String(error)}`);
+  });
   child.stdout?.on('data', (chunk) => {
     child.output.stdout = tailText(child.output.stdout + chunk.toString());
   });
@@ -439,12 +544,16 @@ function tailText(text, max = 4000) {
   return String(text ?? '').slice(-max);
 }
 
-export async function waitForUrl(url, timeoutMs = 30000) {
+export async function waitForUrl(
+  url,
+  timeoutMs = 30000,
+  { fetchFn = fetch, retryDelayMs = 500 } = {},
+) {
   const started = Date.now();
   let lastError = '';
   while (Date.now() - started < timeoutMs) {
     try {
-      const response = await fetch(url);
+      const response = await fetchFn(url, { method: 'GET' });
       if (response.ok) {
         return { ok: true, status: response.status, elapsedMs: Date.now() - started };
       }
@@ -452,9 +561,243 @@ export async function waitForUrl(url, timeoutMs = 30000) {
     } catch (error) {
       lastError = error.message;
     }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, retryDelayMs));
   }
   return { ok: false, error: lastError || 'timeout', elapsedMs: Date.now() - started };
+}
+
+export async function startReferenceBridge({
+  repoRoot = moduleRepoRoot,
+  port = REFERENCE_BRIDGE_PORT,
+  healthTimeoutMs = 15000,
+  getOwners = getPortOwners,
+  spawnBridge,
+  waitForHealth = (url, timeoutMs) => waitForUrl(url, timeoutMs),
+  stopProcess = stopPid,
+} = {}) {
+  const root = resolve(repoRoot);
+  const healthUrl = `http://127.0.0.1:${port}/health`;
+  const owners = await getOwners(port);
+
+  if (owners.length > 0) {
+    const classified = classifyPortOwners({
+      port,
+      role: 'reference-bridge',
+      repoRoot: root,
+      owners,
+    });
+    if (classified.blocked.length > 0) {
+      return {
+        status: 'blocked',
+        bridgeReady: false,
+        startedByCall: false,
+        process: null,
+        owners,
+        blocked: classified.blocked,
+        error: {
+          code: `PORT_${port}_OCCUPIED_BY_UNKNOWN`,
+          message: `Port ${port} is occupied by a process that cannot be confirmed as this project's reference bridge.`,
+        },
+      };
+    }
+
+    const health = await waitForHealth(healthUrl, Math.min(healthTimeoutMs, 5000));
+    if (health.ok) {
+      const verifiedOwners = await getOwners(port);
+      const verified = classifyPortOwners({
+        port,
+        role: 'reference-bridge',
+        repoRoot: root,
+        owners: verifiedOwners,
+      });
+      if (verified.blocked.length > 0 || verified.safeToStop.length === 0) {
+        return {
+          status: 'ownership-lost',
+          bridgeReady: false,
+          startedByCall: false,
+          process: null,
+          owners: verifiedOwners,
+          blocked: verified.blocked,
+          health,
+          error: {
+            code: 'REFERENCE_BRIDGE_OWNERSHIP_LOST',
+            message: 'Reference bridge ownership changed while health was being checked.',
+          },
+        };
+      }
+    }
+    return {
+      status: health.ok ? 'reused-ready' : 'reused-unhealthy',
+      bridgeReady: health.ok === true,
+      startedByCall: false,
+      process: null,
+      owners,
+      blocked: [],
+      health,
+    };
+  }
+
+  const launch = createReferenceBridgeLaunchCommand({ repoRoot: root, port });
+  const processInfo = spawnBridge
+    ? spawnBridge(launch)
+    : spawnTracked(launch.command, launch.args, {
+      cwd: root,
+      name: 'reference-bridge',
+    });
+  const health = await waitForHealth(healthUrl, healthTimeoutMs);
+  if (!health.ok) {
+    const cleanup = await stopProcess(processInfo.pid);
+    return {
+      status: 'spawned-unhealthy',
+      bridgeReady: false,
+      startedByCall: true,
+      process: processInfo,
+      health,
+      cleanup,
+      cleanedUp: cleanup.stopped === true,
+    };
+  }
+
+  const verifiedOwners = await getOwners(port);
+  const verified = classifyPortOwners({
+    port,
+    role: 'reference-bridge',
+    repoRoot: root,
+    owners: verifiedOwners,
+  });
+  const spawnedPidIsOwner = verified.safeToStop.some(
+    (owner) => Number(owner.pid) === Number(processInfo.pid),
+  );
+  if (verified.blocked.length > 0 || !spawnedPidIsOwner) {
+    const cleanup = await stopProcess(processInfo.pid);
+    return {
+      status: 'spawned-ownership-lost',
+      bridgeReady: false,
+      startedByCall: true,
+      process: processInfo,
+      owners: verifiedOwners,
+      blocked: verified.blocked,
+      health,
+      cleanup,
+      cleanedUp: cleanup.stopped === true,
+      error: {
+        code: 'REFERENCE_BRIDGE_OWNERSHIP_LOST',
+        message: 'The healthy listener could not be bound to the bridge process started by this call.',
+      },
+    };
+  }
+
+  return {
+    status: 'spawned-ready',
+    bridgeReady: true,
+    startedByCall: true,
+    process: processInfo,
+    health,
+    cleanedUp: false,
+  };
+}
+
+export async function stopReferenceBridge(
+  bridge,
+  { stopProcess = stopPid } = {},
+) {
+  if (!bridge?.startedByCall) {
+    return { stopped: false, reason: 'not-started-by-call' };
+  }
+  if (bridge.cleanedUp) {
+    return { stopped: true, reason: 'already-cleaned' };
+  }
+  const result = await stopProcess(bridge.process?.pid);
+  bridge.cleanedUp = result.stopped === true;
+  return result;
+}
+
+export async function prepareHostAgentEndpoint({
+  repoRoot = moduleRepoRoot,
+  env = process.env,
+  startBridge = startReferenceBridge,
+} = {}) {
+  const callerEnv = { ...env };
+  const configuredUrl = String(callerEnv.LIFE_INDEX_HOST_AGENT_URL ?? '').trim();
+  if (configuredUrl) {
+    return {
+      env: callerEnv,
+      referenceBridge: {
+        status: 'external-configured',
+        bridgeReady: false,
+        startedByCall: false,
+        process: null,
+        configuredUrl,
+      },
+      hostEndpointConfigured: true,
+    };
+  }
+
+  let referenceBridge;
+  try {
+    referenceBridge = await startBridge({ repoRoot: resolve(repoRoot) });
+  } catch (error) {
+    referenceBridge = {
+      status: 'unavailable',
+      bridgeReady: false,
+      startedByCall: false,
+      process: null,
+      error: {
+        code: 'REFERENCE_BRIDGE_START_FAILED',
+        message: error?.message ?? String(error),
+      },
+    };
+  }
+
+  return {
+    env: callerEnv,
+    referenceBridge,
+    hostEndpointConfigured: isTrustedReferenceBridge(referenceBridge),
+  };
+}
+
+export async function queryStructuredHostAgentHealth({
+  backendPort = DEFAULT_BACKEND_PORT,
+  fetchFn = fetch,
+} = {}) {
+  try {
+    const response = await fetchFn(
+      `http://127.0.0.1:${backendPort}/api/host-agent/health`,
+      { method: 'GET' },
+    );
+    if (!response.ok) {
+      return { ok: false, health: null, error: `HTTP ${response.status}` };
+    }
+    const envelope = await response.json();
+    const health = envelope?.data;
+    if (!health || typeof health !== 'object' || Array.isArray(health)) {
+      return { ok: false, health: null, error: 'host-agent health envelope missing data object' };
+    }
+    return { ok: true, health };
+  } catch (error) {
+    return { ok: false, health: null, error: error?.message ?? String(error) };
+  }
+}
+
+export function projectReadinessFacts({
+  guiReady = false,
+  bridgeReady = false,
+  hostEndpointConfigured,
+  hostHealth = null,
+} = {}) {
+  const endpointConfigured = hostEndpointConfigured === undefined
+    ? bridgeReady === true
+    : hostEndpointConfigured === true;
+  const strictHostReady = endpointConfigured
+    && hostHealth?.running === true
+    && hostHealth?.ready === true
+    && hostHealth?.degraded === false;
+  return {
+    guiReady: guiReady === true,
+    referenceBridgeReady: bridgeReady === true,
+    externalHostReady: strictHostReady,
+    aiPlusReady: guiReady === true && strictHostReady,
+  };
 }
 
 async function runCommand(command, args, options = {}) {
@@ -497,6 +840,10 @@ export async function runVerifyStack({
     noOrphans: false,
   };
   const launched = [];
+  let referenceBridge = null;
+  let hostEndpointConfigured = false;
+  let hostHealth = null;
+  let guiReady = false;
   const ports = [
     { port: backendPort, role: 'backend' },
     { port: frontendPort, role: 'frontend' },
@@ -533,8 +880,20 @@ export async function runVerifyStack({
       }
     }
 
+    const hostEndpoint = await prepareHostAgentEndpoint({
+      repoRoot: root,
+      env: process.env,
+    });
+    referenceBridge = hostEndpoint.referenceBridge;
+    hostEndpointConfigured = hostEndpoint.hostEndpointConfigured;
+    result.steps.push({ name: 'reference-bridge', ...referenceBridge, process: undefined });
+    if (!referenceBridge.bridgeReady && referenceBridge.error) {
+      result.warnings.push(referenceBridge.error);
+    }
+
     const backend = spawnTracked(launch.backend.command, launch.backend.args, {
       cwd: root,
+      env: createBackendChildEnv(hostEndpoint.env, referenceBridge),
       name: 'backend',
     });
     launched.push(backend);
@@ -546,6 +905,10 @@ export async function runVerifyStack({
       result.error = { code: 'BACKEND_HEALTH_TIMEOUT', message: health.error };
       return result;
     }
+
+    const hostAgentHealth = await queryStructuredHostAgentHealth({ backendPort });
+    hostHealth = hostAgentHealth.health;
+    result.steps.push({ name: 'host-agent-health', ...hostAgentHealth });
 
     const build = await runCommand(commandName('npm'), ['run', 'build'], { cwd: root });
     result.steps.push({ name: 'frontend-build', ...build });
@@ -572,6 +935,13 @@ export async function runVerifyStack({
       return result;
     }
 
+    guiReady = true;
+    result.readiness = projectReadinessFacts({
+      guiReady,
+      bridgeReady: referenceBridge.bridgeReady,
+      hostEndpointConfigured,
+      hostHealth,
+    });
     result.ok = true;
     return result;
   } catch (error) {
@@ -589,6 +959,15 @@ export async function runVerifyStack({
       }
     }
 
+    let referenceBridgeCleanup = { stopped: true, reason: 'not-acquired' };
+    if (referenceBridge) {
+      referenceBridgeCleanup = await stopReferenceBridge(referenceBridge);
+      result.cleanup.push({
+        name: 'reference-bridge',
+        ...referenceBridgeCleanup,
+      });
+    }
+
     const remaining = [];
     for (const item of ports) {
       const owners = await getPortOwners(item.port);
@@ -598,7 +977,15 @@ export async function runVerifyStack({
       }
       remaining.push(...classified.safeToStop);
     }
-    result.noOrphans = remaining.length === 0;
+    const referenceBridgeClean = !referenceBridge?.startedByCall
+      || referenceBridgeCleanup.stopped === true;
+    result.noOrphans = remaining.length === 0 && referenceBridgeClean;
+    result.readiness = projectReadinessFacts({
+      guiReady,
+      bridgeReady: referenceBridge?.bridgeReady === true,
+      hostEndpointConfigured,
+      hostHealth,
+    });
     result.finishedAt = new Date().toISOString();
   }
 }
@@ -607,6 +994,9 @@ export async function stopAllProjectProcesses({
   repoRoot = moduleRepoRoot,
   backendPort = DEFAULT_BACKEND_PORT,
   frontendPort = DEFAULT_FRONTEND_PORT,
+  referenceBridgePort = REFERENCE_BRIDGE_PORT,
+  getOwners = getPortOwners,
+  stopProcess = stopPid,
 } = {}) {
   const root = resolve(repoRoot);
   const result = {
@@ -619,21 +1009,40 @@ export async function stopAllProjectProcesses({
   for (const item of [
     { port: backendPort, role: 'backend' },
     { port: frontendPort, role: 'frontend' },
+    { port: referenceBridgePort, role: 'reference-bridge' },
   ]) {
-    const owners = await getPortOwners(item.port);
+    const owners = await getOwners(item.port);
     const classified = classifyPortOwners({ ...item, repoRoot: root, owners });
     result.blocked.push(...classified.blocked.map((owner) => ({ ...item, ...owner })));
+    const stopResults = [];
     for (const owner of classified.safeToStop) {
-      result.stopped.push({ ...item, ...(await stopPid(owner.pid)) });
+      const stopResult = { ...item, ...(await stopProcess(owner.pid)) };
+      stopResults.push(stopResult);
+      result.stopped.push(stopResult);
     }
-    result.ports.push({ ...item, owners: owners.length, stopped: classified.safeToStop.length, blocked: classified.blocked.length });
+    result.ports.push({
+      ...item,
+      owners: owners.length,
+      stopped: stopResults.filter((entry) => entry.stopped === true).length,
+      blocked: classified.blocked.length,
+    });
   }
+  result.stopFailures = result.stopped.filter((entry) => entry.stopped !== true);
   if (result.blocked.length > 0) {
     result.ok = false;
     result.error = {
       code: 'UNKNOWN_PORT_OWNERS_PRESENT',
       message: 'Some port owners could not be confirmed as Life Index GUI processes; no unknown process was killed.',
     };
+  }
+  if (result.stopFailures.length > 0) {
+    result.ok = false;
+    if (!result.error) {
+      result.error = {
+        code: 'PROJECT_PROCESS_STOP_FAILED',
+        message: 'One or more project-owned processes could not be stopped.',
+      };
+    }
   }
   return result;
 }

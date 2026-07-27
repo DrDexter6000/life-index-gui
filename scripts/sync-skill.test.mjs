@@ -75,6 +75,20 @@ assert.equal(packageJson.scripts['sync-skill'], 'node scripts/sync-skill.mjs');
     assert.match(skillText, /\/api\/health/);
     assert.match(skillText, /scripts\/stop-all\.mjs/);
     assert.match(skillText, /docs\/AGENT_UPDATE_PLAYBOOK\.md/);
+    assert.match(skillText, /supported\s+external runtimes, including Codex and Hermes/i);
+    assert.match(skillText, /running=true[\s\S]*ready=true[\s\S]*degraded=false/);
+    assert.match(skillText, /Reference bridge reachability[\s\S]*never proves external Host or AI\+ readiness/i);
+    assert.doesNotMatch(skillText, /NOT_SUPPORTED_NOT_PROVEN/);
+    assert.match(skillText, /http:\/\/127\.0\.0\.1:8791\/health/);
+    assert.match(skillText, /\/api\/host-agent\/health/);
+    assert.match(skillText, /GUI ready[\s\S]*Reference bridge ready[\s\S]*External Host ready[\s\S]*AI\+ ready/);
+    assert.match(skillText, /explicitly configured `LIFE_INDEX_HOST_AGENT_URL`[\s\S]*preserved[\s\S]*skips\s+bundled bridge startup/i);
+    assert.match(skillText, /default 127\.0\.0\.1:8791[\s\S]*project-owned[\s\S]*`\/health`[\s\S]*succeeds/i);
+    assert.match(skillText, /unknown process owns 8791[\s\S]*backend Host URL remains\s+unconfigured[\s\S]*AI\+ stays offline/i);
+    assert.match(skillText, /AI\+ ready[\s\S]*GUI and External Host are ready/i);
+    assert.match(skillText, /stop-all[\s\S]*project-owned[\s\S]*never terminates an unknown process/i);
+    assert.match(skillText, /GUI-only\s+reuse[\s\S]*AI\+[\s\S]*offline/i);
+    assert.match(skillText, /Do not install, upgrade, repair, configure, inspect credentials, or manage unrelated processes/i);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

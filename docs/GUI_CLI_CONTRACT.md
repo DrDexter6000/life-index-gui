@@ -176,7 +176,7 @@ boundary or adding any GUI runtime, AI+, provenance, or schema surface.
 | Entity read/review | `entity --stats`, `--list`, `--check`, `--audit`, `entity --review --json`, `--candidate-edges` | entity maintenance center and review queues | active; `--review --json` queue items must expose structured `action_choices[]` payloads plus `source_id`/`target_id`; candidate edges are maintenance/review data only, not consumer graph edges |
 | Entity profile consumption | `entity profile --id <id> --json`, optional backend support for `entity profile --name <name> --json` | `/api/entities/profile` and `/entities/:entityId` profile page; links from search attribution and entity maintenance list | active Phase 1; GUI consumes CLI profile JSON only, filters display to confirmed relationships, and does not read `entity_graph.yaml` or generated `Entities/*.md` files |
 | Entity mutate/review consent | `entity maintain --delete --id <id> --preview --json`, `entity maintain --delete --id <id> --apply --backup --json`, `entity --review --action preview --review-action <action> --id <review_item_id> --source-id <source_id> [--target-id <target_id>] [--relation <relation>] --json`, `entity --review --action <action> --id <review_item_id> --source-id <source_id> [--target-id <target_id>] [--relation <relation>] --json` | guarded delete plus review cards Same/Different/Not-sure and candidate confirm/reject/skip | review cards require the global CLI `1.4.5+` floor and consume structured review action payloads. GUI gates this surface through `/api/version`, consumes structured action payloads only, previews before apply, then runs post-check; update/add-alias remain blocked |
-| Import jobs | `import plan/run/status/rollback --json` | dry-run preview, confirmed run, status, rollback | active for consumed fixture and photo timeline envelopes |
+| Import jobs | `import plan/run/status/rollback --json` | no current GUI operation; `/import` presents Coming Soon | dormant for GUI; backend/CLI contracts retained |
 
 Unsupported assumptions:
 
@@ -418,9 +418,12 @@ Mode semantics:
 | `UNAVAILABLE` | Handoff interface is unavailable. | Show unavailable state; no fake answer. |
 | unknown string | Future verifier state. | Neutral badge; no crash. |
 
-## Import Jobs
+## Import Jobs (Dormant GUI Contract)
 
-GUI may consume import envelopes only through backend-mediated CLI calls.
+The current GUI exposes no import operation: `/import` is a Coming Soon surface.
+The backend/CLI envelopes below remain dormant compatibility contracts and
+must not be presented as available GUI actions. If a future Owner-approved GUI
+workflow consumes them, it may do so only through backend-mediated CLI calls.
 
 Stable top-level fields:
 

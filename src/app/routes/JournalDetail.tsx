@@ -16,6 +16,10 @@ import { PageLoader } from '@/components/celestial/CelestialLoader';
 import { getTopicName } from '@/lib/formatters';
 import { attachmentUrl } from '@/lib/attachments';
 import { MarkdownRenderer } from '@/components/journal/MarkdownRenderer';
+import {
+  MediaLightbox,
+  type MediaLightboxAttachment,
+} from '@/components/journal/MediaLightbox';
 import { SimpleEditor } from '@/components/editor/SimpleEditor';
 import type { JournalDetail as JournalDetailData, UpdateJournalRequest } from '@/lib/api-client';
 
@@ -217,7 +221,6 @@ interface JournalEditFormProps {
   onCancel: () => void;
   onSave: () => void;
   onRetryRefresh: () => void;
-  onContinue: () => void;
 }
 
 function JournalEditForm({
@@ -230,7 +233,6 @@ function JournalEditForm({
   onCancel,
   onSave,
   onRetryRefresh,
-  onContinue,
 }: JournalEditFormProps) {
   const { t } = useTranslation();
   const fields: Array<{ field: Exclude<JournalEditField, 'content'>; label: string }> = [
@@ -341,16 +343,6 @@ function JournalEditForm({
               {t('retryRefresh')}
             </button>
           )}
-          <button
-            type="button"
-            aria-label={t('continueWriting')}
-            data-testid="journal-detail-continue-edit"
-            onClick={onContinue}
-            disabled={isPending}
-            className="rounded-full border border-white/[0.08] px-5 py-2.5 text-sm text-[var(--color-muted)] transition-colors hover:border-[var(--color-gold)]/30 hover:text-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {t('continueWriting')}
-          </button>
         </div>
       </form>
     </div>
@@ -380,6 +372,7 @@ export default function JournalDetail() {
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [canonicalOverride, setCanonicalOverride] = useState<JournalDetailData | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<MediaLightboxAttachment | null>(null);
 
   const displayedJournal = canonicalOverride ?? journal;
   const isMutationPending = isSaving || updateJournal.isPending;
@@ -455,10 +448,6 @@ export default function JournalDetail() {
     }
   }, [editModeRequested]);
 
-  const navigateToContinue = useCallback(() => {
-    navigate(`/?append=${encodeURIComponent(id)}`);
-  }, [id, navigate]);
-
   const exitEditMode = useCallback(() => {
     bypassBlockRef.current = true;
     resetEditState();
@@ -469,6 +458,10 @@ export default function JournalDetail() {
     if (isMutationPending || saveInFlightRef.current) return;
     exitEditMode();
   }, [exitEditMode, isMutationPending]);
+
+  const closePreview = useCallback(() => {
+    setPreviewAttachment(null);
+  }, []);
 
   const updateDraftField = useCallback((field: JournalEditField, value: string) => {
     setEditDraft((current) => (current ? { ...current, [field]: value } : current));
@@ -607,6 +600,9 @@ export default function JournalDetail() {
     <>
       <ScrollProgress />
       <ScrollToTop />
+      {previewAttachment && (
+        <MediaLightbox attachment={previewAttachment} onClose={closePreview} />
+      )}
 
       <motion.div
         className="max-w-[1200px] mx-auto px-6"
@@ -643,17 +639,6 @@ export default function JournalDetail() {
                     {viewJournal.title}
                   </h1>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    <motion.button
-                      type="button"
-                      aria-label={t('continueWriting')}
-                      onClick={navigateToContinue}
-                      className="p-3 rounded-xl bg-[var(--color-ether-surface-ghost)] text-[var(--color-muted)] hover:bg-[var(--color-ether-control)] hover:text-[var(--color-gold)] transition-colors cursor-pointer"
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      title={t('continueWriting')}
-                    >
-                      <span className="material-symbols-outlined text-lg">edit_note</span>
-                    </motion.button>
                     <motion.button
                       type="button"
                       aria-label={t('editJournal')}
@@ -759,7 +744,6 @@ export default function JournalDetail() {
                   onCancel={cancelEditing}
                   onSave={handleSave}
                   onRetryRefresh={handleRefreshRetry}
-                  onContinue={navigateToContinue}
                 />
               )}
             </GlassCard>
@@ -778,13 +762,12 @@ export default function JournalDetail() {
                     const url = attachmentUrl(attachment.relPath);
                     if (isImageAttachment(attachment.contentType)) {
                       return (
-                        <a
+                        <button
+                          type="button"
                           key={attachment.relPath}
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
+                          onClick={() => setPreviewAttachment({ ...attachment, kind: 'image' })}
                           aria-label={`${t('attachmentImagePreview')}: ${attachment.filename}`}
-                          className="block overflow-hidden rounded-xl border border-white/[0.06] bg-[var(--color-ether-surface-ghost)]"
+                          className="block w-full overflow-hidden rounded-xl border border-white/[0.06] bg-[var(--color-ether-surface-ghost)] text-left"
                         >
                           <img
                             src={url}
@@ -795,7 +778,7 @@ export default function JournalDetail() {
                           <span className="block px-3 py-2 text-xs text-[var(--color-secondary)]">
                             {attachment.filename}
                           </span>
-                        </a>
+                        </button>
                       );
                     }
                     if (isVideoAttachment(attachment.contentType)) {

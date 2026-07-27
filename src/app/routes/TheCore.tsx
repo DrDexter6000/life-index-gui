@@ -60,16 +60,13 @@ export default function TheCore() {
   const focusEditorAfterFirstUseActivationRef = useRef(false);
   const editId = searchParams.get('edit') ?? '';
   const isEditMode = Boolean(editId);
-  const appendId = searchParams.get('append') ?? '';
-  const isAppendMode = Boolean(appendId);
-  const draftScope = createJournalDraftScope({ editId, appendId });
+  const draftScope = createJournalDraftScope({ editId });
   const [draftCacheReady, setDraftCacheReady] = useState(false);
   const [attachmentCacheReady, setAttachmentCacheReady] = useState(false);
 
   // Data fetching
   const { data: stats, isLoading: statsLoading } = useDashboardStats();
   const { data: editJournal, isLoading: editJournalLoading } = useJournal(editId);
-  const { data: appendJournal, isLoading: appendJournalLoading } = useJournal(appendId);
   const { data: healthData, isError: healthUnavailable } = useHealthCheck();
   const smartCapabilityAvailable = !healthUnavailable && !isSmartCapabilityUnavailable(healthData);
 
@@ -77,8 +74,7 @@ export default function TheCore() {
   const isWriteBusy =
     createJournal.isPending ||
     updateJournal.isPending ||
-    (isEditMode && editJournalLoading) ||
-    (isAppendMode && appendJournalLoading);
+    (isEditMode && editJournalLoading);
   const showHeroScreen = !homeActivated && !showEmptyState && !isWriteBusy;
   const actionBarCollapsed = isEtherDissolve && !showMetadata && !showAttachments && !zenChromeAwake;
 
@@ -171,7 +167,7 @@ export default function TheCore() {
       setHomeActivated(true);
     } else {
       recoveredDraftScopeRef.current = null;
-      if (!isEditMode && !isAppendMode) {
+      if (!isEditMode) {
         refreshDraftDateIfPristine();
       }
     }
@@ -195,7 +191,6 @@ export default function TheCore() {
     };
   }, [
     draftScope,
-    isAppendMode,
     isEditMode,
     refreshDraftDateIfPristine,
     setDraftContent,
@@ -249,12 +244,6 @@ export default function TheCore() {
     setHomeActivated(true);
   }, [draftScope, editId, editJournal, setDraftContent, setHomeActivated, updateDraftMetadata]);
 
-  // Activate the write surface when entering continuation mode, but do NOT load old content
-  useEffect(() => {
-    if (!appendId || !appendJournal) return;
-    setHomeActivated(true);
-  }, [appendId, appendJournal, setHomeActivated]);
-
   const handleFirstUseWriteClick = () => {
     focusEditorAfterFirstUseActivationRef.current = true;
     setHomeActivated(true);
@@ -296,20 +285,6 @@ export default function TheCore() {
     setSaveError(null);
 
     try {
-      if (isAppendMode) {
-        if (!draft.content.trim()) return;
-
-        await updateJournal.mutateAsync({
-          id: appendId,
-          data: {
-            contentAppend: draft.content,
-          },
-        });
-
-        await finishSaveAndNavigate(appendId);
-        return;
-      }
-
       if (isEditMode) {
         await updateJournal.mutateAsync({
           id: editId,
@@ -515,9 +490,7 @@ export default function TheCore() {
               }`}
               style={{ fontFamily: 'var(--font-control)' }}
             >
-              {isAppendMode && appendJournal?.title
-                ? t('continueWritingBanner', { title: appendJournal.title })
-                : t('newThreadLabel')}
+              {t('newThreadLabel')}
             </div>
             {/* Editor — always visible, no grid collapse */}
             <SimpleEditor
@@ -582,11 +555,7 @@ export default function TheCore() {
                     type="button"
                     onClick={handleSave}
                     aria-label={t('castToSea')}
-                    disabled={
-                      isAppendMode
-                        ? !draft.content.trim()
-                        : !draft.metadata.title?.trim() && !draft.content.trim()
-                    }
+                    disabled={!draft.metadata.title?.trim() && !draft.content.trim()}
                     className="flex items-center justify-center gap-2 px-8 py-3 rounded-full font-medium text-sm max-sm:h-12 max-sm:w-14 max-sm:px-0 max-sm:py-0 max-sm:text-[0.8rem] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{
                       background: 'transparent',

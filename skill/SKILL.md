@@ -38,17 +38,40 @@ The normative cross-layer roles and CURRENT/TARGET delivery status live in the G
 - D5 newline-JSON-RPC remains `DEFERRED / NOT NECESSARY NOW`.
 - The CLI retains all Life Index data and write authority; direct L1 access
   remains forbidden.
-- The runtime-neutral Host Agent handoff contract is unchanged. This source
-  package does not establish Hermes GUI AI+ compatibility; it remains
-  `NOT_SUPPORTED_NOT_PROVEN`.
+- The runtime-neutral Host Agent handoff contract is shared by supported
+  external runtimes, including Codex and Hermes. Life Index only detects,
+  invokes, and reports the caller-managed Runtime; it does not install,
+  upgrade, repair, configure, or own Runtime credentials.
+- GUI AI+ is ready only when the GUI is ready and structured Host health
+  reports `running=true`, `ready=true`, and `degraded=false`. Reference bridge reachability
+  is a separate fact and never proves external Host or AI+ readiness.
 
 ## Before Starting
 
-1. Check whether the GUI is already running.
-   - Frontend: open or probe `http://127.0.0.1:5173`.
-   - Backend: probe `http://127.0.0.1:8000/api/health`.
-2. If both endpoints respond, reuse the existing session and provide `http://127.0.0.1:5173`.
-3. If either endpoint is unavailable, start the stack from the installed checkout.
+1. Probe the existing session without changing it:
+   - Frontend: `http://127.0.0.1:5173`.
+   - Backend: `http://127.0.0.1:8000/api/health`.
+   - Reference bridge: HTTP GET `http://127.0.0.1:8791/health`.
+   - Structured Host health: `http://127.0.0.1:8000/api/host-agent/health`.
+2. Report four separate facts:
+   - **GUI ready** only when both frontend and backend respond.
+   - **Reference bridge ready** only when its `/health` HTTP request succeeds.
+   - **External Host ready** only when structured Host health has exactly
+     `running=true`, `ready=true`, and `degraded=false`.
+   - **AI+ ready** only when GUI and External Host are ready. A user-provided
+     bridge does not need the bundled reference bridge to be running.
+3. An explicitly configured `LIFE_INDEX_HOST_AGENT_URL` is preserved and skips
+   bundled bridge startup.
+4. Without an explicit URL, the default 127.0.0.1:8791 endpoint is injected
+   only after the bundled bridge is confirmed project-owned and its `/health`
+   succeeds. If an unknown process owns 8791, the backend Host URL remains
+   unconfigured, AI+ stays offline, and the working GUI remains available.
+5. If GUI is ready, reuse it and provide `http://127.0.0.1:5173`. GUI-only
+   reuse is valid: when any AI+ prerequisite is unavailable, report AI+ as
+   offline while leaving the working GUI available.
+6. If GUI is not ready, start the stack from the installed checkout.
+
+Do not install, upgrade, repair, configure, inspect credentials, or manage unrelated processes while checking or reusing an existing session.
 
 ## Start
 
@@ -112,6 +135,9 @@ Equivalent direct command:
 ```bash
 node scripts/stop-all.mjs
 ```
+
+`stop-all` stops only project-owned backend, frontend, and reference bridge
+processes. It reports but never terminates an unknown process.
 
 ## Upgrade And Operations
 

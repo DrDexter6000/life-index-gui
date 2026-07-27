@@ -33,10 +33,36 @@ describe('MonthlyHeatmap presenter', () => {
       />,
     );
 
-    expect(screen.getByTestId('heatmap-day-2026-04-02')).toHaveTextContent('2');
+    const activeDay = screen.getByTestId('heatmap-day-2026-04-02');
+    expect(activeDay).toHaveTextContent('2');
+    expect(activeDay).toBeEnabled();
     expect(screen.getByRole('grid')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('heatmap-day-2026-04-02'));
+    fireEvent.click(activeDay);
     expect(mockDay).toHaveBeenCalledWith('2026-04-02');
+  });
+
+  it('makes zero-count days natively disabled and inert for focus and activation', () => {
+    render(
+      <MonthlyHeatmap
+        month="2026-04"
+        days={[{ date: '2026-04-02', count: 2 }]}
+        onPreviousMonth={mockPrevious}
+        onNextMonth={mockNext}
+        onDaySelect={mockDay}
+      />,
+    );
+
+    const emptyDay = screen.getByTestId('heatmap-day-2026-04-01');
+    expect(emptyDay).toBeDisabled();
+    expect(emptyDay).toHaveAttribute('aria-disabled', 'true');
+
+    emptyDay.focus();
+    expect(emptyDay).not.toHaveFocus();
+    fireEvent.click(emptyDay);
+    fireEvent.keyDown(emptyDay, { key: 'Enter' });
+    fireEvent.keyDown(emptyDay, { key: ' ' });
+
+    expect(mockDay).not.toHaveBeenCalled();
   });
 
   it('exposes keyboard-accessible month controls and disables future navigation', () => {

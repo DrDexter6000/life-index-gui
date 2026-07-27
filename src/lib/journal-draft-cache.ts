@@ -26,10 +26,8 @@ interface IndexedAttachmentRecord {
 
 export function createJournalDraftScope(params: {
   editId?: string;
-  appendId?: string;
 }): string {
   if (params.editId) return `edit:${params.editId}`;
-  if (params.appendId) return `append:${params.appendId}`;
   return 'new';
 }
 

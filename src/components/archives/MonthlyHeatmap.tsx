@@ -75,20 +75,27 @@ export function MonthlyHeatmap({
             aria-label={`${monthName} ${year}`}
             className="grid grid-cols-7 gap-1.5 sm:gap-2"
           >
-            {cells.map(({ date, count }) => (
-              <button
-                key={date}
-                type="button"
-                role="gridcell"
-                aria-label={`${date}: ${count}`}
-                data-testid={`heatmap-day-${date}`}
-                onClick={() => onDaySelect?.(date)}
-                className="min-h-9 rounded-md border border-white/5 text-xs text-[var(--color-secondary)] transition-colors hover:border-[var(--color-gold)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-gold)]"
-                style={{ backgroundColor: heatmapColor(count) }}
-              >
-                {Number(date.slice(-2))}
-              </button>
-            ))}
+            {cells.map(({ date, count }) => {
+              const isEmpty = count === 0;
+              return (
+                <button
+                  key={date}
+                  type="button"
+                  role="gridcell"
+                  aria-label={`${date}: ${count}`}
+                  aria-disabled={isEmpty}
+                  data-testid={`heatmap-day-${date}`}
+                  disabled={isEmpty}
+                  onClick={() => {
+                    if (!isEmpty) onDaySelect?.(date);
+                  }}
+                  className="min-h-9 rounded-md border border-white/5 text-xs text-[var(--color-secondary)] transition-colors hover:border-[var(--color-gold)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-gold)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-white/5"
+                  style={{ backgroundColor: heatmapColor(count) }}
+                >
+                  {Number(date.slice(-2))}
+                </button>
+              );
+            })}
           </div>
         )}
         <p className="mt-4 text-xs text-[var(--color-muted)]">

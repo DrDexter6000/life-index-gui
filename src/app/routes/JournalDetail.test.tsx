@@ -77,13 +77,29 @@ vi.mock('@/hooks/useTranslation', () => ({
          editRefreshFailed: 'Saved, but the journal could not be refreshed. Your edits are still here.',
          retryRefresh: 'Retry refresh',
          unsavedChangesPrompt: 'You have unsaved changes. Leave this page?',
-         continueWriting: 'Continue',
-        continueWritingBanner: `Continuing: ${opts?.title ?? ''}`,
         readingTime: `${opts?.minutes ?? 1} min read`,
         attachments: 'Attachments',
         attachmentImagePreview: 'Image attachment preview',
         attachmentVideoPreview: 'Video attachment preview',
         attachmentOpen: 'Open attachment',
+        hostAgentMediaLoading: 'Loading...',
+        hostAgentMediaLoadFailed: 'Media failed to load',
+        hostAgentMediaPreviewFailed: 'Preview failed',
+        hostAgentMediaRetry: 'Retry',
+        hostAgentMediaRetryAria: 'Retry media load',
+        hostAgentMediaViewOriginal: 'View Original',
+        hostAgentMediaViewOriginalAria: `View original ${opts?.filename ?? ''}`,
+        hostAgentMediaDownload: 'Download',
+        hostAgentMediaDownloadAria: `Download attachment ${opts?.filename ?? ''}`,
+        hostAgentMediaClose: 'Close',
+        hostAgentMediaDiagnosticChecking: 'Checking the media path...',
+        hostAgentMediaDiagnosticBackend: `Backend returned ${opts?.status ?? ''}.`,
+        hostAgentMediaDiagnosticTunnel: `Tunnel returned ${opts?.status ?? ''}.`,
+        hostAgentMediaDiagnosticBrowser: 'Browser could not render media.',
+        hostAgentMediaDiagnosticNetwork: 'Network request failed.',
+        hostAgentMediaDiagnosticHttp: `Media request returned ${opts?.status ?? ''}.`,
+        hostAgentMediaDiagnosticUnknown: 'Unknown media failure.',
+        hostAgentMediaDiagnosticUrl: `Request ${opts?.url ?? ''}`,
         weekdaySun: 'Sun',
         weekdayMon: 'Mon',
         weekdayTue: 'Tue',
@@ -177,6 +193,63 @@ describe('JournalDetail attachments', () => {
       'href',
       '/api/attachments/2026/04/report.pdf',
     );
+  });
+
+  it('opens image attachments in an in-product preview with explicit original download', async () => {
+    renderDetail();
+    await screen.findByText('Attachment Entry');
+
+    const previewButton = screen.getByRole('button', {
+      name: 'Image attachment preview: photo.jpg',
+    });
+    expect(screen.queryByRole('link', { name: 'Image attachment preview: photo.jpg' })).not.toBeInTheDocument();
+
+    fireEvent.click(previewButton);
+
+    expect(screen.getByRole('dialog', { name: 'photo.jpg' })).toBeInTheDocument();
+    expect(screen.getByTestId('host-agent-media-lightbox-image')).toHaveAttribute(
+      'src',
+      '/api/attachments/2026/04/photo.jpg?variant=preview&max_px=1400',
+    );
+    expect(screen.getByRole('link', { name: 'Download attachment photo.jpg' })).toHaveAttribute(
+      'href',
+      '/api/attachments/2026/04/photo.jpg',
+    );
+    expect(screen.getByRole('link', { name: 'Download attachment photo.jpg' })).toHaveAttribute(
+      'download',
+      'photo.jpg',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View original photo.jpg' }));
+    expect(screen.getByTestId('host-agent-media-lightbox-image')).toHaveAttribute(
+      'src',
+      '/api/attachments/2026/04/photo.jpg',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    const assignedImageSources: string[] = [];
+    const originalSetAttribute = Element.prototype.setAttribute;
+    const setAttributeSpy = vi.spyOn(Element.prototype, 'setAttribute').mockImplementation(function (
+      this: Element,
+      name: string,
+      value: string,
+    ) {
+      if (this instanceof HTMLImageElement && name === 'src') assignedImageSources.push(value);
+      originalSetAttribute.call(this, name, value);
+    });
+
+    fireEvent.click(previewButton);
+    setAttributeSpy.mockRestore();
+
+    expect(assignedImageSources).not.toContain('/api/attachments/2026/04/photo.jpg');
+    expect(screen.getByTestId('host-agent-media-lightbox-image')).toHaveAttribute(
+      'src',
+      '/api/attachments/2026/04/photo.jpg?variant=preview&max_px=1400',
+    );
+    expect(screen.queryByTestId('host-agent-media-error')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'photo.jpg' })).not.toBeInTheDocument();
   });
 
   it('normalizes attachment paths that start with /attachments/ or attachments/', async () => {
@@ -282,7 +355,7 @@ describe('JournalDetail honest states (H1–H3)', () => {
   });
 });
 
-describe('JournalDetail continue writing (CN1)', () => {
+describe('JournalDetail actions', () => {
   beforeEach(() => {
     vi.mocked(useJournal).mockReturnValue({
       isLoading: false,
@@ -307,18 +380,12 @@ describe('JournalDetail continue writing (CN1)', () => {
     } as unknown as UseQueryResult<JournalDetailType, Error>);
   });
 
-  it('navigates to /?append=<id> when the continue-writing button is clicked', () => {
+  it('offers full Edit without exposing a dedicated Continue action', () => {
     renderDetail();
 
-    const continueBtn = screen.getByRole('button', { name: 'Continue' });
-    expect(continueBtn).toBeInTheDocument();
-
-    fireEvent.click(continueBtn);
-
-    expect(mockNavigate).toHaveBeenCalledTimes(1);
-    expect(mockNavigate).toHaveBeenCalledWith(
-      '/?append=2026%2F04%2Flife-index_2026-04-19_001',
-    );
+    expect(screen.getByRole('button', { name: 'Edit journal' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('journal-detail-continue-edit')).not.toBeInTheDocument();
   });
 });
 
@@ -689,14 +756,13 @@ describe('JournalDetail product DoD draft exits', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/recall'));
   });
 
-  it('blocks POP and both Link/imperative navigation exits, and exposes Continue in edit mode', async () => {
+  it('blocks POP and both Link/imperative navigation exits without exposing Continue in edit mode', async () => {
     const { router } = renderDetail(['/recall', `/journal/${EDIT_ID}`]);
     fireEvent.click(screen.getByRole('button', { name: 'Edit journal' }));
     fireEvent.change(screen.getByLabelText('Edit title'), { target: { value: 'Draft title' } });
 
-    const editContinue = screen.getByTestId('journal-detail-continue-edit');
-    expect(editContinue).toBeInTheDocument();
-    expect(editContinue.closest('.hidden')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('journal-detail-continue-edit')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('probe-link'));
     expect(router.state.location.pathname).toBe(`/journal/${EDIT_ID}`);
@@ -705,20 +771,16 @@ describe('JournalDetail product DoD draft exits', () => {
     fireEvent.click(screen.getByTestId('probe-navigate'));
     expect(router.state.location.pathname).toBe(`/journal/${EDIT_ID}`);
 
-    fireEvent.click(screen.getByTestId('journal-detail-continue-edit'));
-    expect(router.state.location.pathname).toBe(`/journal/${EDIT_ID}`);
-    expect(router.state.location.search).toBe('?mode=edit');
-
     act(() => {
       router.navigate(-1);
     });
     expect(router.state.location.pathname).toBe(`/journal/${EDIT_ID}`);
 
     vi.mocked(window.confirm).mockReturnValue(true);
-    fireEvent.click(screen.getByTestId('journal-detail-continue-edit'));
+    fireEvent.click(screen.getByTestId('probe-navigate'));
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe('/');
-      expect(router.state.location.search).toBe(`?append=${encodeURIComponent(EDIT_ID)}`);
+      expect(router.state.location.pathname).toBe('/home');
+      expect(router.state.location.search).toBe('');
     });
   });
 

@@ -836,37 +836,23 @@ describe('TheCore', () => {
     });
   });
 
-  describe('S6 - Append continuation', () => {
-    it('should start with an empty editor, show a continuation banner with the target title, and save via contentAppend', async () => {
+  describe('M6-B - dedicated continuation removal', () => {
+    it('treats a legacy append query as the ordinary new-entry flow without fetching or updating the target', async () => {
       mockUseDashboardStats.mockReturnValue({
         data: { totalJournals: 5 },
         isLoading: false,
       });
+      useUIStore.getState().setHomeActivated(true);
 
       const appendId = '2026/05/life-index_2026-05-28_001';
-      const mockUpdate = vi.fn().mockResolvedValue({ id: appendId });
-      mockUseJournal.mockImplementation((id: string) => ({
-        data: id === appendId
-          ? {
-              id,
-              title: 'Existing Title',
-              date: '2026-05-28',
-              content: 'Existing content',
-              abstract: null,
-              topics: [],
-              moods: [],
-              people: [],
-              location: null,
-              weather: null,
-              project: null,
-              links: [],
-              wordCount: 2,
-            }
-          : undefined,
-        isLoading: false,
-      }));
+      const create = vi.fn().mockResolvedValue({ id: 'new-entry' });
+      const update = vi.fn();
+      mockUseCreateJournal.mockReturnValue({
+        mutateAsync: create,
+        isPending: false,
+      });
       mockUseUpdateJournal.mockReturnValue({
-        mutateAsync: mockUpdate,
+        mutateAsync: update,
         isPending: false,
       });
 
@@ -875,85 +861,21 @@ describe('TheCore', () => {
         [`/?append=${encodeURIComponent(appendId)}`],
       );
 
-      // Banner shows the target title (CN4)
-      await waitFor(() => {
-        expect(screen.getByText(`继续写：Existing Title`)).toBeInTheDocument();
-      });
-
-      // Editor starts empty, NOT pre-filled with old content
       const textarea = screen.getByLabelText('Journal content');
       expect(textarea).toHaveValue('');
-      expect(screen.queryByText('Existing content')).not.toBeInTheDocument();
+      expect(screen.getByText('NEW THREAD / 新织线')).toBeInTheDocument();
+      expect(screen.queryByText(/继续写/)).not.toBeInTheDocument();
+      expect(mockUseJournal).not.toHaveBeenCalledWith(appendId);
 
-      // Save disabled until content is entered
-      const saveButton = screen.getByText('保存');
-      expect(saveButton.closest('button')).toBeDisabled();
-
-      // Type new content and save
-      fireEvent.change(textarea, { target: { value: 'Appended content' } });
-      expect(saveButton.closest('button')).not.toBeDisabled();
-      fireEvent.click(saveButton);
+      fireEvent.change(textarea, { target: { value: 'Fresh entry content' } });
+      fireEvent.click(screen.getByText('保存'));
 
       await waitFor(() => {
-        expect(mockUpdate).toHaveBeenCalledWith({
-          id: appendId,
-          data: expect.objectContaining({
-            contentAppend: 'Appended content',
-          }),
-        });
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({
+          content: 'Fresh entry content',
+        }));
       });
-
-      // Must NOT send contentReplace
-      const calls = mockUpdate.mock.calls;
-      expect(calls.length).toBe(1);
-      expect(calls[0][0].data).not.toHaveProperty('contentReplace');
-
-      await waitFor(() => {
-        expect(screen.getByTestId('current-pathname')).toHaveTextContent(
-          `/journal/${appendId}`,
-        );
-      });
-    });
-
-    it('should keep the save button disabled in append mode when the editor is empty', () => {
-      mockUseDashboardStats.mockReturnValue({
-        data: { totalJournals: 5 },
-        isLoading: false,
-      });
-
-      const appendId = '2026/05/life-index_2026-05-28_001';
-      mockUseJournal.mockImplementation((id: string) => ({
-        data: id === appendId
-          ? {
-              id,
-              title: 'Existing Title',
-              date: '2026-05-28',
-              content: 'Existing content',
-              abstract: null,
-              topics: [],
-              moods: [],
-              people: [],
-              location: null,
-              weather: null,
-              project: null,
-              links: [],
-              wordCount: 2,
-            }
-          : undefined,
-        isLoading: false,
-      }));
-      mockUseUpdateJournal.mockReturnValue({
-        mutateAsync: vi.fn(),
-        isPending: false,
-      });
-
-      renderWithProviders(
-        <TheCore />,
-        [`/?append=${encodeURIComponent(appendId)}`],
-      );
-
-      const saveButton = screen.getByText('保存');
-      expect(saveButton.closest('button')).toBeDisabled();
+      expect(update).not.toHaveBeenCalled();
     });
   });
 

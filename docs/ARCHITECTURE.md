@@ -55,9 +55,13 @@ consumer or verified MCP incompatibility.
 exists in source. Actual shipped state must be verified from `package.json`,
 `CHANGELOG.md`, and the public tag/release rather than frozen phase prose. The
 CLI retains all Life Index data and write authority, direct L1 access remains
-forbidden, and the runtime-neutral Host Agent handoff contract is unchanged.
-This source package does not establish Hermes GUI AI+ compatibility; it remains
-`NOT_SUPPORTED_NOT_PROVEN`.
+forbidden, and the runtime-neutral Host Agent handoff contract is shared by
+supported external runtimes, including Codex and Hermes. Life Index owns only
+detect, invoke, and report integration; it does not own Runtime installation,
+upgrade, repair, persistent configuration, or credentials. GUI AI+ is ready
+only when structured Host health reports `running=true`, `ready=true`, and
+`degraded=false`; reference bridge reachability is reported separately and
+never proves external Host or AI+ readiness.
 
 **CURRENT D3 boundary:** A GUI-owned dashboard provider
 may compose canonical contracts transiently, but it is not a Core dashboard
@@ -91,11 +95,13 @@ AGPL-3.0-only distribution is [Life Index CLI inline ADR-005](https://github.com
 
 The GUI provides these durable surface groups:
 
-- daily writing and continuation flows;
+- daily writing and full-entry editing flows;
 - journal reading, deterministic keyword search, Host Agent handoff, and
   attachment access;
 - archive dashboards and maintenance views for health, index diagnostics,
-  entity graph review, imports, and index-tree diagnostics;
+  entity graph review, and index-tree diagnostics;
+- a visible `/import` Coming Soon surface; existing backend/CLI import
+  contracts remain dormant and are not a current GUI workflow;
 - future advanced memory surfaces only after the CLI exposes stable contracts
   for the underlying capability.
 
@@ -119,12 +125,13 @@ The frontend is a React/Vite application. Exact package versions live in
 
 Core routes and surfaces:
 
-- The Core: write, recent entries, continuation, edit entry handoff.
+- The Core: write, recent entries, and full-entry edit handoff.
 - Recall: deterministic keyword search plus Host Agent grounded-query handoff.
 - Archives: dashboard and entry points into maintenance/import surfaces.
 - Journal Detail: CLI-mediated journal content and attachment links.
-- Health, Index Diagnostics, Entity Graph, Import Workflow, and Index Tree
-  Diagnostics: maintenance and review surfaces backed by stable CLI envelopes.
+- Import: a visible Coming Soon surface with no active import actions.
+- Health, Index Diagnostics, Entity Graph, and Index Tree Diagnostics:
+  maintenance and review surfaces backed by stable CLI envelopes.
 
 Frontend state is UI state. Browser storage can remember preferences or drafts
 when product-approved, but it must not become a private durable source of truth
