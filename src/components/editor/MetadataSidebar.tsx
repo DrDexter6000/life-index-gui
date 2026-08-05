@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { GlassCard } from '@/components/celestial/GlassCard';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useGeolocation } from '@/hooks/useGeolocation';
@@ -13,6 +13,8 @@ interface MetadataSidebarProps {
   draftScope?: string;
   onUpdate: (metadata: Partial<JournalMetadata>) => void;
   smartCapabilityAvailable?: boolean;
+  topicMode?: TopicMode;
+  fieldScope?: 'full' | 'import-review';
 }
 
 type ProposalFieldValue = string | string[] | null | undefined;
@@ -87,15 +89,32 @@ const PROPOSAL_FIELD_LABEL_KEYS: Record<ProposalTargetField, string> = {
   links: 'linksLabel',
 };
 
-const TOPICS = [
-  { key: 'work', labelKey: 'topicWork' as const, color: 'var(--color-gold)' },
-  { key: 'learn', labelKey: 'topicLearn' as const, color: 'var(--color-cyan)' },
-  { key: 'health', labelKey: 'topicHealth' as const, color: 'var(--color-coral)' },
-  { key: 'relation', labelKey: 'topicRelation' as const, color: 'var(--color-gold)' },
-  { key: 'think', labelKey: 'topicThink' as const, color: 'var(--color-cyan)' },
-  { key: 'create', labelKey: 'topicCreate' as const, color: 'var(--color-coral)' },
-  { key: 'life', labelKey: 'topicLife' as const, color: 'var(--color-primary)' },
-];
+export type TopicMode = 'multiple' | 'single';
+
+export const TOPICS = [
+  { key: 'work', labelKey: 'topicWork', color: 'var(--color-gold)' },
+  { key: 'learn', labelKey: 'topicLearn', color: 'var(--color-cyan)' },
+  { key: 'health', labelKey: 'topicHealth', color: 'var(--color-coral)' },
+  { key: 'relation', labelKey: 'topicRelation', color: 'var(--color-gold)' },
+  { key: 'think', labelKey: 'topicThink', color: 'var(--color-cyan)' },
+  { key: 'create', labelKey: 'topicCreate', color: 'var(--color-coral)' },
+  { key: 'life', labelKey: 'topicLife', color: 'var(--color-primary)' },
+] as const;
+
+// Canonical topic keys, derived from TOPICS so the seven-key list lives once.
+export type TopicKey = (typeof TOPICS)[number]['key'];
+export const TOPIC_KEYS: readonly TopicKey[] = TOPICS.map((topic) => topic.key);
+
+const TOPIC_KEY_SET: ReadonlySet<string> = new Set(TOPIC_KEYS);
+
+function resolveTopics(raw: string, mode: TopicMode): string[] {
+  const parsed = parseListProposal(raw);
+  if (mode !== 'single') return parsed;
+  // Single mode resolves to at most one accepted key, so a free-text payload
+  // can never carry a hidden multi-topic value.
+  const firstAccepted = parsed.find((item) => TOPIC_KEY_SET.has(item));
+  return firstAccepted ? [firstAccepted] : [];
+}
 
 function parseCoordinates(value: string): { lat: number; lng: number } | null {
   const match = value.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
@@ -458,8 +477,14 @@ export function MetadataSidebar({
   draftScope = 'new',
   onUpdate,
   smartCapabilityAvailable = true,
+  topicMode = 'multiple',
+  fieldScope = 'full',
 }: MetadataSidebarProps) {
   const { t, lang } = useTranslation();
+  const isImportReviewScope = fieldScope === 'import-review';
+  const fieldScopeRef = useRef(fieldScope);
+  const enrichmentScopeGenerationRef = useRef(0);
+  const enrichmentMountedRef = useRef(false);
   const [newPerson, setNewPerson] = useState('');
   const [newMood, setNewMood] = useState('');
   const [locationStatus, setLocationStatus] = useState<string | null>(null);
@@ -486,10 +511,32 @@ export function MetadataSidebar({
   const latestLocationRef = useRef(metadata.location ?? '');
   const geolocation = useGeolocation();
 
-  const { data: hostAgentHealth } = useHostAgentHealth();
+  const { data: hostAgentHealth } = useHostAgentHealth(!isImportReviewScope);
   const metadataProposal = useHostAgentMetadataProposal();
 
-  const smartMetadataEnabled = AI_PLUS_FEATURE_ENABLES.smartMetadata && smartCapabilityAvailable;
+  useLayoutEffect(() => {
+    if (fieldScopeRef.current !== fieldScope) {
+      fieldScopeRef.current = fieldScope;
+      enrichmentScopeGenerationRef.current += 1;
+    }
+    enrichmentMountedRef.current = true;
+    return () => {
+      enrichmentMountedRef.current = false;
+    };
+  }, [fieldScope]);
+
+  const isEnrichmentScopeCurrent = useCallback(
+    (generation: number) =>
+      enrichmentMountedRef.current &&
+      fieldScopeRef.current === 'full' &&
+      enrichmentScopeGenerationRef.current === generation,
+    [],
+  );
+
+  const smartMetadataEnabled =
+    !isImportReviewScope &&
+    AI_PLUS_FEATURE_ENABLES.smartMetadata &&
+    smartCapabilityAvailable;
   const smartMetadataReady = Boolean(
     smartMetadataEnabled
     && hostAgentHealth?.running === true
@@ -643,7 +690,11 @@ export function MetadataSidebar({
     void navigator.clipboard?.writeText(metadataAgentDetailReason);
   }, [metadataAgentDetailReason]);
 
-  const queryWeatherForLocation = useCallback(async (locationOverride?: string) => {
+  const queryWeatherForLocation = useCallback(async (
+    locationOverride?: string,
+    scopeGeneration = enrichmentScopeGenerationRef.current,
+  ) => {
+    if (!isEnrichmentScopeCurrent(scopeGeneration)) return;
     const targetLocation = (locationOverride ?? latestLocationRef.current).trim();
     if (!targetLocation) return;
 
@@ -652,6 +703,7 @@ export function MetadataSidebar({
 
     try {
       const weather = await dashboardAPI.getWeather(targetLocation, metadata.date);
+      if (!isEnrichmentScopeCurrent(scopeGeneration)) return;
       if (weather.trim()) {
         onUpdate({ weather });
         setWeatherStatus(t('weatherReady'));
@@ -659,21 +711,27 @@ export function MetadataSidebar({
         setWeatherStatus(t('weatherUnavailable'));
       }
     } catch (error) {
+      if (!isEnrichmentScopeCurrent(scopeGeneration)) return;
       if (import.meta.env.DEV) {
         console.warn('Weather enrichment failed:', error);
       }
       setWeatherStatus(t('weatherUnavailable'));
     } finally {
-      setIsResolvingWeather(false);
+      if (isEnrichmentScopeCurrent(scopeGeneration)) {
+        setIsResolvingWeather(false);
+      }
     }
-  }, [metadata.date, onUpdate, t]);
+  }, [isEnrichmentScopeCurrent, metadata.date, onUpdate, t]);
 
   const detectLocationAndWeather = useCallback(async () => {
+    const scopeGeneration = enrichmentScopeGenerationRef.current;
+    if (!isEnrichmentScopeCurrent(scopeGeneration)) return;
     setIsResolvingLocation(true);
     setLocationStatus(t('locationResolving'));
 
     try {
       const detected = await geolocation.detect();
+      if (!isEnrichmentScopeCurrent(scopeGeneration)) return;
       if (!detected) {
         setLocationStatus(t('locationAutoHint'));
         return;
@@ -683,35 +741,49 @@ export function MetadataSidebar({
       const location = coordinates
         ? await dashboardAPI.getGeocode(coordinates.lat, coordinates.lng)
         : detected;
+      if (!isEnrichmentScopeCurrent(scopeGeneration)) return;
 
       if (location.trim()) {
         onUpdate({ location });
         setLocationStatus(t('locationReady'));
-        await queryWeatherForLocation(location);
+        await queryWeatherForLocation(location, scopeGeneration);
       }
     } catch (error) {
+      if (!isEnrichmentScopeCurrent(scopeGeneration)) return;
       if (import.meta.env.DEV) {
         console.warn('Location enrichment failed:', error);
       }
       setLocationStatus(t('locationAutoHint'));
     } finally {
-      setIsResolvingLocation(false);
+      if (isEnrichmentScopeCurrent(scopeGeneration)) {
+        setIsResolvingLocation(false);
+      }
     }
-  }, [geolocation, onUpdate, queryWeatherForLocation, t]);
+  }, [geolocation, isEnrichmentScopeCurrent, onUpdate, queryWeatherForLocation, t]);
 
   useEffect(() => {
+    if (!isImportReviewScope) return;
+    setIsResolvingLocation(false);
+    setIsResolvingWeather(false);
+    setLocationStatus(null);
+    setWeatherStatus(null);
+  }, [isImportReviewScope]);
+
+  useEffect(() => {
+    if (isImportReviewScope) return;
     if (autoEnrichmentStarted.current) return;
     if (metadata.location?.trim()) return;
 
     autoEnrichmentStarted.current = true;
     void detectLocationAndWeather();
-  }, [detectLocationAndWeather, metadata.location]);
+  }, [detectLocationAndWeather, isImportReviewScope, metadata.location]);
 
   useEffect(() => {
     latestLocationRef.current = metadata.location ?? '';
   }, [metadata.location]);
 
   useEffect(() => {
+    if (isImportReviewScope) return;
     const proposal = metadataProposal.data;
     if (!proposal || proposal.mode !== 'PROPOSED') return;
     const proposalRequestId = typeof proposal.request_id === 'string' ? proposal.request_id : null;
@@ -771,10 +843,16 @@ export function MetadataSidebar({
     if (Object.keys(patch).length > 0) {
       onUpdate(patch);
     }
-  }, [activeProposalRequestId, contextIdentity, draftScope, metadata, metadataProposal.data, onUpdate, revisionIdentity]);
+  }, [activeProposalRequestId, contextIdentity, draftScope, isImportReviewScope, metadata, metadataProposal.data, onUpdate, revisionIdentity]);
 
   const toggleTopic = (topic: string) => {
     const currentTopics = metadata.topics || [];
+    if (topicMode === 'single') {
+      // Single mode is exclusive: selecting a topic replaces any other, and
+      // re-clicking the active topic clears the selection.
+      onUpdate({ topics: currentTopics.includes(topic) ? [] : [topic] });
+      return;
+    }
     if (currentTopics.includes(topic)) {
       onUpdate({
         topics: currentTopics.filter((t) => t !== topic),
@@ -825,6 +903,10 @@ export function MetadataSidebar({
     key: 'topics' | 'moods' | 'people' | 'tags' | 'links',
     value: string,
   ) => {
+    if (key === 'topics') {
+      onUpdate({ topics: resolveTopics(value, topicMode) });
+      return;
+    }
     onUpdate({ [key]: parseListProposal(value) });
   };
 
@@ -842,7 +924,8 @@ export function MetadataSidebar({
         <h3 className="text-base font-semibold text-[var(--color-primary)]">
           {t('metadata')}
         </h3>
-        <div className="relative ml-auto" data-testid="metadata-agent-action-cluster">
+        {!isImportReviewScope && (
+          <div className="relative ml-auto" data-testid="metadata-agent-action-cluster">
           <button
             type="button"
             data-testid="metadata-agent-propose-button"
@@ -1017,10 +1100,11 @@ export function MetadataSidebar({
               })}
             </section>
           )}
-        </div>
+          </div>
+        )}
       </div>
 
-      {unfilledProposalFields && (
+      {!isImportReviewScope && unfilledProposalFields && (
         <p
           data-testid="metadata-agent-unfilled-summary"
           role="status"
@@ -1056,19 +1140,21 @@ export function MetadataSidebar({
           </p>
         </div>
 
-        {/* Abstract */}
-        <div>
-          <label htmlFor="metadata-abstract" className="text-[var(--text-label)] text-[var(--color-muted)] mb-2 block" style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em' }}>
-            {t('abstractLabel')}
-          </label>
-          <textarea
-            id="metadata-abstract"
-            value={metadata.abstract || ''}
-            onChange={(e) => onUpdate({ abstract: e.target.value })}
-            rows={3}
-            className="li-field-placeholder w-full resize-y px-4 py-2.5 bg-[var(--color-ether-surface-ghost)] border border-white/[0.06] rounded-xl text-[var(--color-primary)] text-sm focus:outline-none focus:border-[var(--color-gold)]/50 hover:border-[var(--color-gold)]/30 transition-colors placeholder:text-[var(--color-secondary)]"
-          />
-        </div>
+        {!isImportReviewScope && (
+          <div>
+            {/* Abstract */}
+            <label htmlFor="metadata-abstract" className="text-[var(--text-label)] text-[var(--color-muted)] mb-2 block" style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em' }}>
+              {t('abstractLabel')}
+            </label>
+            <textarea
+              id="metadata-abstract"
+              value={metadata.abstract || ''}
+              onChange={(e) => onUpdate({ abstract: e.target.value })}
+              rows={3}
+              className="li-field-placeholder w-full resize-y px-4 py-2.5 bg-[var(--color-ether-surface-ghost)] border border-white/[0.06] rounded-xl text-[var(--color-primary)] text-sm focus:outline-none focus:border-[var(--color-gold)]/50 hover:border-[var(--color-gold)]/30 transition-colors placeholder:text-[var(--color-secondary)]"
+            />
+          </div>
+        )}
 
         {/* Date */}
         <div>
@@ -1110,40 +1196,42 @@ export function MetadataSidebar({
           </div>
         </div>
 
-        {/* Moods */}
-        <div>
-          <label htmlFor="metadata-mood" className="text-[var(--text-label)] text-[var(--color-muted)] mb-2 block" style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em' }}>
-            {t('moods')}
-          </label>
-          <div className="flex gap-2 mb-2">
-            <input
-              id="metadata-mood"
-              type="text"
-              value={newMood}
-              onChange={(e) => setNewMood(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addMood())}
-              placeholder={t('moodInputPlaceholder')}
-              className="li-field-placeholder flex-1 px-4 py-2 bg-[var(--color-ether-surface-ghost)] border border-white/[0.06] rounded-xl text-[var(--color-primary)] text-sm focus:outline-none focus:border-[var(--color-gold)]/50 hover:border-[var(--color-gold)]/30 transition-colors placeholder:text-[var(--color-secondary)]"
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {metadata.moods?.map((mood) => (
-              <span
-                key={mood}
-                className="inline-flex items-center gap-1 px-3 py-1 bg-[var(--color-cyan)]/20 text-[var(--color-cyan)] rounded-full text-xs border border-[var(--color-cyan)]/30"
-              >
-                {mood}
-                <button
-                  type="button"
-                  onClick={() => removeMood(mood)}
-                  className="text-[var(--color-cyan)]/70 hover:text-[var(--color-cyan)] transition-colors"
+        {!isImportReviewScope && (
+          <div>
+            {/* Moods */}
+            <label htmlFor="metadata-mood" className="text-[var(--text-label)] text-[var(--color-muted)] mb-2 block" style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em' }}>
+              {t('moods')}
+            </label>
+            <div className="flex gap-2 mb-2">
+              <input
+                id="metadata-mood"
+                type="text"
+                value={newMood}
+                onChange={(e) => setNewMood(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addMood())}
+                placeholder={t('moodInputPlaceholder')}
+                className="li-field-placeholder flex-1 px-4 py-2 bg-[var(--color-ether-surface-ghost)] border border-white/[0.06] rounded-xl text-[var(--color-primary)] text-sm focus:outline-none focus:border-[var(--color-gold)]/50 hover:border-[var(--color-gold)]/30 transition-colors placeholder:text-[var(--color-secondary)]"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {metadata.moods?.map((mood) => (
+                <span
+                  key={mood}
+                  className="inline-flex items-center gap-1 px-3 py-1 bg-[var(--color-cyan)]/20 text-[var(--color-cyan)] rounded-full text-xs border border-[var(--color-cyan)]/30"
                 >
-                  ×
-                </button>
-              </span>
-            ))}
+                  {mood}
+                  <button
+                    type="button"
+                    onClick={() => removeMood(mood)}
+                    className="text-[var(--color-cyan)]/70 hover:text-[var(--color-cyan)] transition-colors"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Tags */}
         <div>
@@ -1159,8 +1247,9 @@ export function MetadataSidebar({
           />
         </div>
 
-        {/* Location + Weather */}
-        <div className="grid grid-cols-2 max-[640px]:grid-cols-1 gap-4">
+        {!isImportReviewScope && (
+          <div className="grid grid-cols-2 max-[640px]:grid-cols-1 gap-4">
+          {/* Location + Weather */}
           <div>
             <div className="text-[var(--text-label)] text-[var(--color-muted)] mb-2 flex items-center gap-1" style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em' }}>
               <label htmlFor="metadata-location">{t('locationLabel')}</label>
@@ -1210,10 +1299,12 @@ export function MetadataSidebar({
             />
             <p className="text-xs text-[var(--color-secondary)] mt-1" role="status">{weatherHelperText}</p>
           </div>
-        </div>
+          </div>
+        )}
 
-        {/* People + Project */}
-        <div className="grid grid-cols-2 max-[640px]:grid-cols-1 gap-4">
+        {!isImportReviewScope && (
+          <div className="grid grid-cols-2 max-[640px]:grid-cols-1 gap-4">
+          {/* People + Project */}
           <div>
             <label htmlFor="metadata-person" className="text-[var(--text-label)] text-[var(--color-muted)] mb-2 block" style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em' }}>{t('people')}</label>
             <div className="flex gap-2 mb-2">
@@ -1257,21 +1348,24 @@ export function MetadataSidebar({
               className="li-field-placeholder w-full px-4 py-2.5 bg-[var(--color-ether-surface-ghost)] border border-white/[0.06] rounded-xl text-[var(--color-primary)] text-sm focus:outline-none focus:border-[var(--color-gold)]/50 hover:border-[var(--color-gold)]/30 transition-colors placeholder:text-[var(--color-secondary)]"
             />
           </div>
-        </div>
+          </div>
+        )}
 
-        {/* Links */}
-        <div>
-          <label htmlFor="metadata-links" className="text-[var(--text-label)] text-[var(--color-muted)] mb-2 block" style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em' }}>
-            {t('linksLabel')}
-          </label>
-          <input
-            id="metadata-links"
-            type="text"
-            value={(metadata.links || []).join(', ')}
-            onChange={(e) => handleListChange('links', e.target.value)}
-            className="li-field-placeholder w-full px-4 py-2 bg-[var(--color-ether-surface-ghost)] border border-white/[0.06] rounded-xl text-[var(--color-primary)] text-sm focus:outline-none focus:border-[var(--color-gold)]/50 hover:border-[var(--color-gold)]/30 transition-colors placeholder:text-[var(--color-secondary)]"
-          />
-        </div>
+        {!isImportReviewScope && (
+          <div>
+            {/* Links */}
+            <label htmlFor="metadata-links" className="text-[var(--text-label)] text-[var(--color-muted)] mb-2 block" style={{ fontFamily: 'var(--font-order)', letterSpacing: '0.08em' }}>
+              {t('linksLabel')}
+            </label>
+            <input
+              id="metadata-links"
+              type="text"
+              value={(metadata.links || []).join(', ')}
+              onChange={(e) => handleListChange('links', e.target.value)}
+              className="li-field-placeholder w-full px-4 py-2 bg-[var(--color-ether-surface-ghost)] border border-white/[0.06] rounded-xl text-[var(--color-primary)] text-sm focus:outline-none focus:border-[var(--color-gold)]/50 hover:border-[var(--color-gold)]/30 transition-colors placeholder:text-[var(--color-secondary)]"
+            />
+          </div>
+        )}
       </div>
     </GlassCard>
   );

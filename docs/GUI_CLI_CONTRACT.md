@@ -176,7 +176,7 @@ boundary or adding any GUI runtime, AI+, provenance, or schema surface.
 | Entity read/review | `entity --stats`, `--list`, `--check`, `--audit`, `entity --review --json`, `--candidate-edges` | entity maintenance center and review queues | active; `--review --json` queue items must expose structured `action_choices[]` payloads plus `source_id`/`target_id`; candidate edges are maintenance/review data only, not consumer graph edges |
 | Entity profile consumption | `entity profile --id <id> --json`, optional backend support for `entity profile --name <name> --json` | `/api/entities/profile` and `/entities/:entityId` profile page; links from search attribution and entity maintenance list | active Phase 1; GUI consumes CLI profile JSON only, filters display to confirmed relationships, and does not read `entity_graph.yaml` or generated `Entities/*.md` files |
 | Entity mutate/review consent | `entity maintain --delete --id <id> --preview --json`, `entity maintain --delete --id <id> --apply --backup --json`, `entity --review --action preview --review-action <action> --id <review_item_id> --source-id <source_id> [--target-id <target_id>] [--relation <relation>] --json`, `entity --review --action <action> --id <review_item_id> --source-id <source_id> [--target-id <target_id>] [--relation <relation>] --json` | guarded delete plus review cards Same/Different/Not-sure and candidate confirm/reject/skip | review cards require the global CLI `1.4.5+` floor and consume structured review action payloads. GUI gates this surface through `/api/version`, consumes structured action payloads only, previews before apply, then runs post-check; update/add-alias remain blocked |
-| Import jobs | `import plan/run/status/rollback --json` | no current GUI operation; `/import` presents Coming Soon | dormant for GUI; backend/CLI contracts retained |
+| Historical-photo import | `import plan/reviews/review/status/validate/rebind/confirm/preview/run/rollback --json` | active `/import` review, queue, explicit batch, preview, and child rollback workbench; proposal edits use `confirm --edit` | active; CLI ledger is durable authority and backend source-root binding is transient |
 
 Unsupported assumptions:
 
@@ -418,12 +418,14 @@ Mode semantics:
 | `UNAVAILABLE` | Handoff interface is unavailable. | Show unavailable state; no fake answer. |
 | unknown string | Future verifier state. | Neutral badge; no crash. |
 
-## Import Jobs (Dormant GUI Contract)
+## Historical-Photo Import Workbench
 
-The current GUI exposes no import operation: `/import` is a Coming Soon surface.
-The backend/CLI envelopes below remain dormant compatibility contracts and
-must not be presented as available GUI actions. If a future Owner-approved GUI
-workflow consumes them, it may do so only through backend-mediated CLI calls.
+`/import` is the active historical-photo review workbench. Its authority route
+is GUI → backend → CLI: the CLI import ledger is the sole durable authority for
+review membership, proposal state, pagination, batches, and recovery. The
+backend source-root mapping is transient, and restart requires explicit rebind
+before source-dependent operations resume. The browser stores neither a durable
+queue nor a source path.
 
 Stable top-level fields:
 
@@ -433,20 +435,45 @@ Stable top-level fields:
 - `data`
 - `error`
 
-Supported nested schemas include `import_plan.v1`, `import_run.v1`,
-`import_status.v1`, `import_rollback.v1`, `import_job_ledger.v1`, and
-`import_rollback_manifest.v1`.
+Supported nested schemas include the import plan/review/status/run/rollback
+families emitted by the canonical CLI contract.
 
 Rules:
 
-- `import plan` is a dry run and must not be presented as committed.
-- `import run` requires exact confirmation from the plan envelope.
-- Backend may materialize temporary plan input outside `LIFE_INDEX_DATA_DIR` and
-  may hold transient source-root mappings in memory.
-- Backend must return a controlled re-plan error if required transient
-  source-root state is missing.
-- GUI must not create a durable import ledger, parse rollback manifests, parse
-  media metadata, or resolve import conflicts locally.
+- The six proposal states are `pending`, `confirmed`, `skipped`, `stale`,
+  `batching`, and `imported`. The CLI owns these states, persisted cursor
+  pagination, `queue_revision`, and `queue_counts`; the GUI only renders them.
+- Preview bytes come through the CLI. Backend and frontend must not read L1,
+  parse rollback manifests, parse source media, or resolve conflicts locally.
+- Confirm queues selections only. Batch execution is explicit. Child rollback
+  is server-controlled and status refresh derives recovery from CLI authority;
+  the GUI does not invent a second retry state.
+- The source tree remains read-only. Only selected/included photos publish
+  attachments into canonical Life Index storage; excluded photos never enter
+  Attachments.
+- JPEG/JPG is supported. HEIC/HEIF must carry an honest compatibility warning
+  until the provider contract supports it; the GUI must not imply conversion
+  or successful import.
+- Directory selection v1 is explicit local path plus validate/rebind. This is a
+  named **GO-WITH-CONCERNS**: there is no native directory picker, and any future
+  picker requires separate authority rather than silently becoming a durable
+  source-path store.
+- Backend may materialize temporary plan input outside `LIFE_INDEX_DATA_DIR`
+  and may hold transient source-root mappings in memory. Missing transient
+  binding returns the controlled rebind-required response.
+- Historical-photo import is an import-only CLI surface with a higher floor
+  than the global GUI handshake: the `/import` workbench requires CLI `1.6.2+`
+  even though the global GUI floor remains `1.4.5+`. The GUI gates `/import`
+  locally through `/api/version` (`compatible` plus a strict
+  `MAJOR.MINOR.PATCH` check of `cli_package_version`) and fail-closes the
+  workbench — unmounted, so no import hooks run, with an honest upgrade prompt
+  — when the CLI is globally compatible but below `1.6.2` (for example
+  `1.5.3`, `1.6.0`, or `1.6.1`), when the version is missing or unparseable,
+  or when `/api/version` reports incompatible or errors. This adds no second
+  authority or shared version framework and gates only `/import`: the global
+  GUI handshake stays `1.4.5+`, so a globally compatible CLI on `1.5.3`,
+  `1.6.0`, or `1.6.1` keeps full access to every non-import route (journals,
+  search, etc.).
 
 ## Entity Mutation Discipline
 

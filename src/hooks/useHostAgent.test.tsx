@@ -99,6 +99,23 @@ describe('useHostAgentHealth', () => {
     expect(result.current.data?.mode).toBe('UNAVAILABLE');
     expect(result.current.data?.reason).toBe('host-agent-unconfigured');
   });
+
+  it('stays idle and performs no health fetch when disabled', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(mockFetchSuccess(unavailableHealth));
+
+    const { result } = renderHook(() => useHostAgentHealth(false), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.current.fetchStatus).toBe('idle');
+  });
 });
 
 describe('useHostAgentMetadataProposal', () => {

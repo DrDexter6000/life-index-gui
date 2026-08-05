@@ -84,12 +84,13 @@ export function mapHostAgentStreamPhase(rawPhase?: string | null): HostAgentStre
   return 'planning';
 }
 
-export function useHostAgentHealth() {
+export function useHostAgentHealth(enabled = true) {
   return useQuery({
     queryKey: hostAgentKeys.health(),
     queryFn: () => hostAgentAPI.getHealth(),
     staleTime: 10 * 1000,
     retry: 1,
+    enabled,
   });
 }
 

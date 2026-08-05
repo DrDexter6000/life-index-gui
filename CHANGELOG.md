@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-05
+
+### What users get
+- Historical-photo import leaves "Coming Soon": with Life Index CLI 1.6.2 or newer, the `/import` workbench opens for review, queue, preview, explicit batching, and child rollback.
+- Users on CLI 1.5.3, 1.6.0, or 1.6.1 keep full use of the ordinary GUI (journals, search, archives, entities, dashboard) and see a clear bilingual upgrade notice only when they open `/import`. The global CLI floor stays 1.4.5.
+
+### Included in this release
+- Historical-photo import workbench behind an import-only CLI floor of 1.6.2+, gated locally on `/import` via `/api/version`: the workbench stays unmounted (no import hooks run) with an honest upgrade prompt when the CLI is globally compatible but below 1.6.2, when the version is missing or unparseable, or when `/api/version` is incompatible or errors.
+- No change to the global GUI CLI handshake (still 1.4.5+), no change to the backend adapter's global CLI floor, and no new shared version framework; only `/import` is gated.
+
 ## [0.5.4] - 2026-07-27
 
 ### What users get
