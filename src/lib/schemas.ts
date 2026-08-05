@@ -828,6 +828,183 @@ export const ImportRollbackResponseSchema = z.object({
   errors: z.array(ImportErrorSchema).optional(),
 }).passthrough();
 
+// ── Import review schemas (M7 — historical-photo review queue & batch) ────
+// The frozen CLI emits data.schema_version = "import_review.v1" for validate,
+// stage, reviews list, review queue, review status, confirm-edit, and rebind.
+// The CLI import job is the sole durable authority; these schemas model its
+// GUI-facing projection additively (passthrough) so additive CLI fields
+// survive, while preserving the absent-vs-present-empty distinction for every
+// optional collection — they are `.optional()`, never `.default([])`.
+
+/** Proposal states are exactly these six (review.py STATE_*). No second model. */
+export const ImportReviewStateSchema = z.enum([
+  'pending',
+  'confirmed',
+  'skipped',
+  'stale',
+  'batching',
+  'imported',
+]);
+
+/** Editable journal fields an edit payload may carry (review.py _EDITABLE_JOURNAL_FIELDS). */
+export const ImportReviewEditableJournalSchema = z.object({
+  title: z.string().optional(),
+  date: z.string().optional(),
+  topic: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  content: z.string().optional(),
+}).passthrough();
+
+/** Proposal-level date resolution (status: exif_authoritative|user_confirmed|unresolved). */
+export const ImportDateResolutionSchema = z.object({
+  status: z.string().optional(),
+  date: z.string().optional(),
+}).passthrough();
+
+/**
+ * A projected conflict/warning. Adapter messages can embed a source locator,
+ * so only structured code/severity (+ runnable) are surfaced — never message
+ * text. `format`/`preview_available` appear on persisted scan-level warnings.
+ */
+export const ImportReviewAdvisorySchema = z.object({
+  code: z.string().optional(),
+  severity: z.string().optional(),
+  runnable: z.boolean().optional(),
+  format: z.string().optional(),
+  preview_available: z.boolean().optional(),
+}).passthrough();
+
+/**
+ * A selectable source_fact attachment. The CLI emits attachment_id / source_ref
+ * / media_type / size / selected only (no filesystem path); `selected` is the
+ * real flag the UI binds and is always present in the projection.
+ */
+export const ImportReviewAttachmentSchema = z.object({
+  attachment_id: z.string(),
+  source_ref: z.string().optional(),
+  media_type: z.string().optional(),
+  size: z.number().optional(),
+  selected: z.boolean(),
+}).passthrough();
+
+/** Shared GUI-facing projection of a single review proposal (review_queue page). */
+export const ImportReviewProposalSchema = z.object({
+  proposal_id: z.string(),
+  state: ImportReviewStateSchema,
+  journal: ImportReviewEditableJournalSchema.optional(),
+  date_resolution: ImportDateResolutionSchema.optional(),
+  conflicts: z.array(ImportReviewAdvisorySchema).optional(),
+  warnings: z.array(ImportReviewAdvisorySchema).optional(),
+  available_attachments: z.array(ImportReviewAttachmentSchema).optional(),
+}).passthrough();
+
+/** Server-authoritative per-state counts (queue_counts). */
+export const ImportQueueCountsSchema = z.record(z.string(), z.number().int());
+
+/**
+ * The frozen CLI ``_child_batch_projection`` (tools/ingest/review.py) — the
+ * exact safe fields the UI reads to gate rollback. ``import_id`` and
+ * ``rollback_available`` are required; ``rollback_available`` is a strict
+ * boolean (never unknown / coerced / truthy), so a missing or non-boolean
+ * value fails closed instead of silently enabling a rollback button.
+ * ``created_at`` / ``updated_at`` are nullable-optional: the CLI emits them
+ * when a batch has run, but a not-yet-run batch may omit them, and a missing
+ * timestamp must never fail the whole status parse.
+ */
+export const ImportReviewBatchSchema = z.object({
+  import_id: z.string(),
+  state: z.string().nullable(),
+  proposal_ids: z.array(z.string()),
+  proposal_count: z.number().int().nonnegative(),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+  rollback_available: z.boolean(),
+}).passthrough();
+
+/** A parent review job summary on the reviews-list surface. */
+export const ImportReviewJobSummarySchema = z.object({
+  import_id: z.string(),
+  state: z.string().optional(),
+  queue_counts: ImportQueueCountsSchema.optional(),
+  active_child_id: z.string().nullable().optional(),
+  recovery_required: z.boolean().optional(),
+  authority_status: z.string().nullable().optional(),
+  plan_revision: z.number().int().optional(),
+  queue_revision: z.number().int().optional(),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+}).passthrough();
+
+/**
+ * The import_review.v1 envelope shared by validate / stage / review queue /
+ * review status / confirm-edit / rebind. All collection fields are optional
+ * (absent vs present-empty preserved). `queue_counts` and `queue_revision`
+ * are server-authoritative — never derive counts locally. Identity is
+ * variant-dependent (stage/confirm expose `parent_id`, queue/status expose
+ * `import_id`), so both are modeled additively.
+ */
+export const ImportReviewResponseSchema = z.object({
+  schema_version: z.string(),
+  parent_id: z.string().optional(),
+  import_id: z.string().optional(),
+  kind: z.string().optional(),
+  state: z.string().optional(),
+  // Authority tokens / revisions (server-authoritative).
+  source_root_identity: z.string().optional(),
+  plan_fingerprint: z.string().optional(),
+  idempotency_key: z.string().optional(),
+  queue_revision: z.number().int().optional(),
+  plan_revision: z.number().int().optional(),
+  queue_counts: ImportQueueCountsSchema.optional(),
+  proposal_states: z.record(z.string(), ImportReviewStateSchema).optional(),
+  // Recovery / authority facts (surfaced verbatim from the backend envelope).
+  active_child_id: z.string().nullable().optional(),
+  recovery_required: z.boolean().optional(),
+  authority_status: z.string().nullable().optional(),
+  rebound: z.boolean().optional(),
+  readable: z.boolean().optional(),
+  reason_code: z.string().nullable().optional(),
+  // Pagination (review queue page).
+  total_all: z.number().int().optional(),
+  total_filtered: z.number().int().optional(),
+  offset: z.number().int().optional(),
+  limit: z.number().int().optional(),
+  has_more: z.boolean().optional(),
+  next_offset: z.number().int().nullable().optional(),
+  // OPTIONAL collections — absent vs present-empty preserved (no default).
+  proposals: z.array(ImportReviewProposalSchema).optional(),
+  proposal: ImportReviewProposalSchema.optional(),
+  warnings: z.array(ImportReviewAdvisorySchema).optional(),
+  batches: z.array(ImportReviewBatchSchema).optional(),
+}).passthrough();
+
+/** The ``import reviews`` list envelope (jobs + has_more, always present). */
+export const ImportReviewsListResponseSchema = z.object({
+  schema_version: z.string(),
+  jobs: z.array(ImportReviewJobSummarySchema),
+  has_more: z.boolean(),
+}).passthrough();
+
+/**
+ * Preview metadata sidecar (the x-preview-metadata header). The backend strips
+ * source_rel_path / source_sha256 (locators/hashes) before emitting; this
+ * schema models ONLY the exact safe fields and intentionally does NOT
+ * passthrough, so any locator/hash that slipped into the header is stripped
+ * before the UI sees it. Every field is required and literal/strict: the
+ * client re-verifies identity and size against the request before trusting any
+ * byte, then parses with this schema as a final locator-stripping guard. Never
+ * log or surface the parsed object's bytes/paths.
+ */
+export const ImportPreviewMetadataSchema = z.object({
+  schema_version: z.literal('import_preview.v1'),
+  parent_id: z.string(),
+  proposal_id: z.string(),
+  attachment_id: z.string(),
+  size_bytes: z.number().int().nonnegative(),
+  media_type: z.literal('image/jpeg'),
+  available: z.literal(true),
+});
+
 // ── Maintenance schemas (M33 — Data Doctor Repair UI) ──────────────────────
 // All maintenance schemas use .passthrough() so additive CLI envelope fields
 // are not stripped. Frontend code must not assume fields beyond what is

@@ -370,6 +370,13 @@ def test_dashboard_rejects_discover_errors_as_warning_not_empty_success():
 
 def test_dashboard_rejects_future_month_before_any_cli_call():
     with (
+        # Pin the host-local day so the future-month guard is deterministic
+        # regardless of the real wall clock; 2026-08 is strictly future
+        # relative to this injected 2026-07-15 today.
+        patch(
+            "backend.routers.dashboard.host_local_today",
+            return_value=date(2026, 7, 15),
+        ),
         patch.object(CLIAdapter, "handshake", new_callable=AsyncMock) as handshake,
         patch.object(CLIAdapter, "run_json", new_callable=AsyncMock) as run_json,
     ):

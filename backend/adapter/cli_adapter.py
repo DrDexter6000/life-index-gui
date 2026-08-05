@@ -7,12 +7,51 @@ import os
 import re
 import shlex
 import subprocess
+import time
 
 from backend import config
 
 logger = logging.getLogger(__name__)
 
 MIN_SUPPORTED_CLI_VERSION = "1.4.5"
+
+# Preview byte-streams are capped at 4 concurrent reads so a burst of image
+# previews cannot exhaust subprocess/file-handle capacity. Module-level so the
+# cap spans every adapter instance and request.
+_PREVIEW_CONCURRENCY_LIMIT = 4
+_PREVIEW_CONCURRENCY = asyncio.Semaphore(_PREVIEW_CONCURRENCY_LIMIT)
+
+# How long a positive CLI-compatibility probe is trusted before re-probing.
+# Negative probes are never cached so a CLI upgrade is detected promptly.
+_COMPAT_CACHE_TTL_SECONDS = 300.0
+
+# Flags whose values are user-data locators / temp paths and must never appear
+# in logs. Values are redacted; the flag names themselves are not sensitive.
+_REDACT_LOCATOR_FLAGS = frozenset(
+    {"--input", "--source-root", "--plan", "--edit", "--output", "--metadata-output"}
+)
+
+
+def _redact_for_log(cmd: list[str]) -> str:
+    """Render a CLI argv list for logging with locator values redacted.
+
+    Walks the token list and replaces the value following any locator flag
+    (``--plan``, ``--source-root``, ``--input``, ``--edit``, ``--output``,
+    ``--metadata-output``) with ``<redacted>``. Safe ids (``--import-id``,
+    ``--attachment``, ``--proposal-id``) and switches are preserved.
+    """
+    redacted: list[str] = []
+    i = 0
+    n = len(cmd)
+    while i < n:
+        token = cmd[i]
+        redacted.append(token)
+        if token in _REDACT_LOCATOR_FLAGS and i + 1 < n:
+            redacted.append("<redacted>")
+            i += 2
+        else:
+            i += 1
+    return shlex.join(redacted)
 
 
 class CLIError(Exception):
@@ -38,6 +77,9 @@ class CLIAdapter:
         self._timeout = timeout
         self._health_timeout = health_timeout
         self._write_lock = asyncio.Lock()
+        # Timestamp of the last positive compatibility probe; 0 forces a probe
+        # on first use. Negative probes are never cached here.
+        self._compat_cached_at: float = 0.0
 
     async def run(
         self,
@@ -57,7 +99,7 @@ class CLIAdapter:
         cmd = [*shlex.split(self._command), *args]
         effective_timeout = timeout or self._timeout
 
-        logger.info("CLI: %s", shlex.join(cmd))
+        logger.info("CLI: %s", _redact_for_log(cmd))
 
         env = os.environ.copy()
         data_dir = os.environ.get("LIFE_INDEX_DATA_DIR")
@@ -95,7 +137,7 @@ class CLIAdapter:
         cmd = [*shlex.split(self._command), *args]
         effective_timeout = timeout or self._timeout
 
-        logger.info("CLI: %s", shlex.join(cmd))
+        logger.info("CLI: %s", _redact_for_log(cmd))
 
         env = os.environ.copy()
         data_dir = os.environ.get("LIFE_INDEX_DATA_DIR")
@@ -121,10 +163,65 @@ class CLIAdapter:
 
         return completed.stdout
 
+    async def run_preview_bytes(
+        self,
+        args: list[str],
+        timeout: float | None = None,
+    ) -> bytes:
+        """Run a preview CLI command and return raw stdout bytes (undecoded).
+
+        Preview payloads are binary (image bytes); decoding would corrupt
+        them, so the success path returns ``completed.stdout`` verbatim.
+        Concurrency is capped by the module-level preview semaphore so a burst
+        of previews cannot exhaust subprocess / file-handle capacity.
+        """
+        if not _is_handshake_call(args):
+            await self._ensure_cli_compatible()
+
+        cmd = [*shlex.split(self._command), *args]
+        effective_timeout = timeout or self._timeout
+
+        logger.info("CLI: %s", _redact_for_log(cmd))
+
+        env = os.environ.copy()
+        data_dir = os.environ.get("LIFE_INDEX_DATA_DIR")
+        if data_dir:
+            env["LIFE_INDEX_DATA_DIR"] = data_dir
+
+        async with _PREVIEW_CONCURRENCY:
+            try:
+                completed = await asyncio.to_thread(
+                    subprocess.run,
+                    cmd,
+                    capture_output=True,
+                    env=env,
+                    timeout=effective_timeout,
+                )
+            except subprocess.TimeoutExpired:
+                raise CLIError(-1, f"Command timed out after {effective_timeout}s")
+
+        stderr = completed.stderr.decode("utf-8", errors="replace")
+        stdout_text = completed.stdout.decode("utf-8", errors="replace")
+
+        if completed.returncode != 0:
+            raise CLIError(completed.returncode, stderr, stdout_text)
+
+        return completed.stdout
+
     async def _ensure_cli_compatible(self) -> None:
-        """Fail closed before any feature CLI command below the GUI floor."""
+        """Fail closed before any feature CLI command below the GUI floor.
+
+        A positive probe is trusted for ``_COMPAT_CACHE_TTL_SECONDS`` so the
+        shared adapter does not re-probe the CLI version on every request; a
+        negative probe is never cached, so a CLI upgrade is detected promptly.
+        """
+        now = time.time()
+        if now - self._compat_cached_at < _COMPAT_CACHE_TTL_SECONDS:
+            return
+
         version_probe = await self._probe_cli_version()
         if version_probe.get("compatible") is True:
+            self._compat_cached_at = now
             return
 
         error = version_probe.get("error")

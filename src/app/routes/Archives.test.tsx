@@ -126,6 +126,7 @@ function renderArchives() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
   mockUseArchivesDashboard.mockReturnValue({ data: dashboard, isLoading: false, isError: false });
 });
 
@@ -161,6 +162,12 @@ describe('Archives deterministic Panel', () => {
   });
 
   it('disables future navigation and keeps selected month owned by Archives', () => {
+    // Pin the local calendar day (only Date is faked) so the initial selected
+    // month matches the fixture's period.current_month regardless of the real
+    // wall clock. Assertions below are unchanged and remain deterministic.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 6, 15, 12));
+
     renderArchives();
 
     expect(mockUseArchivesDashboard).toHaveBeenCalledWith(expect.stringMatching(/^\d{4}-\d{2}$/), 5);

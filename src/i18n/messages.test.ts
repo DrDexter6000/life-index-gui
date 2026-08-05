@@ -44,4 +44,43 @@ describe('i18n messages', () => {
     expect(en.metadataAgentStatusStale).toBe('Expired');
     expect(zh.metadataAgentStatusStale).toBe('已过期');
   });
+
+  it('keeps historical-photo import copy truthful in both languages', () => {
+    const sharedKeys = [
+      'importSourceReadOnly',
+      'importPhotoExcludeAction',
+      'importSkipCurrent',
+      'importConfirmQueuesOnly',
+      'importBatchConfirmed',
+      'importHeicLimitation',
+      'importRollback',
+      'importRebindGuidance',
+      'importRevisionConflict',
+      'importDateRequired',
+      'importAuthorityBlockedGuidance',
+      'importReviewsPrevious',
+      'importReviewsNext',
+      'importReviewsPage',
+    ] as const;
+
+    for (const key of sharedKeys) {
+      expect(en[key]).toBeTruthy();
+      expect(zh[key]).toBeTruthy();
+    }
+
+    expect(en.importSourceReadOnly).toMatch(/never (deleted|moved|modified)/i);
+    expect(zh.importSourceReadOnly).toMatch(/不会.*(删除|移动|修改)/);
+    expect(zh.importPhotoExcludeAction).toBe('不纳入本篇');
+    expect(zh.importSkipCurrent).toBe('本次跳过');
+    expect(en.importConfirmQueuesOnly).toMatch(/queue/i);
+    expect(zh.importConfirmQueuesOnly).toContain('队列');
+    expect(en.importBatchConfirmed).toContain('{{count}}');
+    expect(zh.importBatchConfirmed).toBe('导入已确认的 {{count}} 篇');
+    expect(en.importHeicLimitation).toMatch(/HEIC|HEIF/);
+    expect(zh.importHeicLimitation).toMatch(/HEIC|HEIF/);
+    expect(zh.importRevisionConflict).toContain('草稿已保留');
+    expect(zh.importRebindGuidance).toContain('重新绑定');
+    expect(en.portalImportDesc).not.toMatch(/coming soon/i);
+    expect(zh.portalImportDesc).not.toContain('即将');
+  });
 });

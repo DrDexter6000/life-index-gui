@@ -727,3 +727,176 @@ async def test_run_uses_default_timeout_not_health_timeout():
         env=ANY,
         timeout=5.0,
     )
+
+
+# ── M7 preview bytes, log redaction, compat TTL cache ─────────────────────
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--input", "/secret/input.json"),
+        ("--source-root", "/photos/library"),
+        ("--plan", "/secret/plan.json"),
+        ("--edit", "/secret/edit.json"),
+        ("--output", "/secret/out.bin"),
+        ("--metadata-output", "/secret/meta.json"),
+    ],
+)
+def test_redact_for_log_redacts_each_locator_flag(flag, value):
+    """Every locator flag's value is redacted from log output."""
+    from backend.adapter.cli_adapter import _redact_for_log
+
+    out = _redact_for_log(["import", "x", flag, value, "--json"])
+    assert value not in out
+    assert "<redacted>" in out
+
+
+def test_redact_for_log_preserves_safe_ids_and_switches():
+    """Safe ids (--import-id, --attachment, --proposal-id) are not redacted."""
+    from backend.adapter.cli_adapter import _redact_for_log
+
+    out = _redact_for_log(
+        ["import", "review", "--import-id", "imp_parent",
+         "--attachment", "att_aaaaaaaaaaaa", "--proposal-id", "prop_x", "--json"]
+    )
+    assert "imp_parent" in out
+    assert "att_aaaaaaaaaaaa" in out
+    assert "prop_x" in out
+    assert "--json" in out
+
+
+def test_redact_for_log_redacts_multiple_locator_values():
+    """Multiple locator flags in one command are all redacted."""
+    from backend.adapter.cli_adapter import _redact_for_log
+
+    out = _redact_for_log(
+        ["import", "stage", "--plan", "/secret/plan.json",
+         "--source-root", "/photos", "--json"]
+    )
+    assert "/secret/plan.json" not in out
+    assert "/photos" not in out
+    assert "stage" in out
+
+
+@pytest.mark.asyncio
+async def test_run_preview_bytes_returns_raw_stdout_undecoded(adapter):
+    """run_preview_bytes returns exact stdout bytes, never decoded (JPEG magic)."""
+    raw = b"\xff\xd8\xff\xe0\x00\x10JFIF"  # JPEG SOI, invalid as UTF-8
+    with patch.object(adapter, "_probe_cli_version", AsyncMock(return_value={"compatible": True})), patch(
+        "backend.adapter.cli_adapter.subprocess.run",
+        return_value=_completed(0, raw, b""),
+    ):
+        result = await adapter.run_preview_bytes(
+            ["import", "preview", "--import-id", "imp_p",
+             "--attachment", "att_a", "--output", "-", "--json"]
+        )
+
+    assert result == raw
+    assert isinstance(result, bytes)
+
+
+@pytest.mark.asyncio
+async def test_run_preview_bytes_raises_clierror_on_nonzero(adapter):
+    """run_preview_bytes raises CLIError when the preview exits non-zero."""
+    with patch.object(adapter, "_probe_cli_version", AsyncMock(return_value={"compatible": True})), patch(
+        "backend.adapter.cli_adapter.subprocess.run",
+        return_value=_completed(1, b"", b"preview failed"),
+    ):
+        with pytest.raises(CLIError) as exc_info:
+            await adapter.run_preview_bytes(
+                ["import", "preview", "--import-id", "imp_p",
+                 "--attachment", "att_a", "--output", "-", "--json"]
+            )
+
+    assert exc_info.value.returncode == 1
+
+
+def test_preview_concurrency_semaphore_caps_at_four():
+    """The preview semaphore is configured for exactly 4 concurrent reads."""
+    from backend.adapter import cli_adapter
+
+    assert cli_adapter._PREVIEW_CONCURRENCY_LIMIT == 4
+
+
+@pytest.mark.asyncio
+async def test_preview_semaphore_blocks_the_fifth_concurrent_acquire():
+    """Acquiring 4 permits blocks a 5th (concurrency cap enforced at runtime)."""
+    from backend.adapter import cli_adapter
+
+    sem = cli_adapter._PREVIEW_CONCURRENCY
+    held = 0
+    try:
+        for _ in range(4):
+            await sem.acquire()
+            held += 1
+        fifth = asyncio.ensure_future(sem.acquire())
+        await asyncio.sleep(0.01)
+        assert not fifth.done(), "preview semaphore must cap at 4 concurrent"
+        fifth.cancel()
+        try:
+            await fifth
+        except asyncio.CancelledError:
+            pass
+    finally:
+        for _ in range(held):
+            sem.release()
+
+
+@pytest.mark.asyncio
+async def test_run_logs_redacted_locator_values(adapter, caplog):
+    """run() logs locator values redacted, switches and subcommands preserved."""
+    import logging
+
+    with patch(
+        "backend.adapter.cli_adapter.subprocess.run",
+        return_value=_completed(0, b"ok", b""),
+    ):
+        with caplog.at_level(logging.INFO, logger="backend.adapter.cli_adapter"):
+            await adapter.run(
+                ["import", "stage", "--plan", "/secret/plan.json",
+                 "--source-root", "/photos", "--json"]
+            )
+
+    logged = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "/secret/plan.json" not in logged
+    assert "/photos" not in logged
+    assert "stage" in logged
+
+
+@pytest.mark.asyncio
+async def test_compat_probe_cached_within_ttl(adapter):
+    """A positive compatibility probe is trusted within the TTL (no re-probe)."""
+    calls = []
+
+    async def fake_probe():
+        calls.append(1)
+        return {"compatible": True}
+
+    with patch.object(adapter, "_probe_cli_version", side_effect=fake_probe):
+        await adapter._ensure_cli_compatible()
+        await adapter._ensure_cli_compatible()
+
+    assert len(calls) == 1  # second call served from the positive cache
+
+
+@pytest.mark.asyncio
+async def test_compat_probe_not_cached_when_incompatible(adapter):
+    """A negative probe is never cached — each call re-probes."""
+    calls = []
+
+    async def fake_probe():
+        calls.append(1)
+        return {
+            "compatible": False,
+            "error": {"code": "CLI_VERSION_UNSUPPORTED", "message": "too old"},
+            "package_version": "1.4.4",
+            "minimum_supported_version": "1.4.5",
+        }
+
+    with patch.object(adapter, "_probe_cli_version", side_effect=fake_probe):
+        for _ in range(2):
+            with pytest.raises(CLIError):
+                await adapter._ensure_cli_compatible()
+
+    assert len(calls) == 2  # negative result never cached

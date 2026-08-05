@@ -39,6 +39,12 @@ import {
   ImportRunResponseSchema,
   ImportStatusResponseSchema,
   ImportRollbackResponseSchema,
+  ImportReviewResponseSchema,
+  ImportReviewsListResponseSchema,
+  ImportPreviewMetadataSchema,
+  ImportReviewProposalSchema,
+  ImportReviewAttachmentSchema,
+  ImportReviewStateSchema,
   MaintenanceAuditResponseSchema,
   MaintenancePlanResponseSchema,
   MaintenanceRepairResponseSchema,
@@ -1070,12 +1076,326 @@ export const importAPI = {
     const raw = await apiClient.post(`/imports/${importId}/rollback`, {});
     return parseData(ImportRollbackResponseSchema, raw);
   },
+
+  // ── M7 historical-photo review surface ─────────────────────────────────
+  // The frozen CLI import job is the sole durable authority. Parent ids carry
+  // no '#' and are path-safe after encodeURIComponent; child batch ids
+  // (PARENT#batch-N) travel only in JSON bodies. Recovery facts inside
+  // `details` (existing_import_id, current_queue_revision, reason, ...) are
+  // preserved verbatim by `unwrap` into APIClientError.details.
+
+  /** Validate a photo source root: POST /api/imports/validate (read-only). */
+  validate: async (req: ImportValidateRequest): Promise<ImportReviewResponse> => {
+    const raw = await apiClient.post('/imports/validate', { source_root: req.source_root });
+    return parseData(ImportReviewResponseSchema, raw);
+  },
+
+  /** Stage a photo review (plan + stage): POST /api/imports/reviews/stage. */
+  stageReview: async (req: ImportStageRequest): Promise<ImportReviewResponse> => {
+    const raw = await apiClient.post('/imports/reviews/stage', { source_root: req.source_root });
+    return parseData(ImportReviewResponseSchema, raw);
+  },
+
+  /** Discover persisted parent review jobs: GET /api/imports/reviews (read-only). */
+  listReviews: async (params: ImportReviewsListParams = {}): Promise<ImportReviewsListResponse> => {
+    const query = new URLSearchParams();
+    if (params.after !== undefined) query.set('after', params.after);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    const raw = await apiClient.get(`/imports/reviews${suffix}`);
+    return parseData(ImportReviewsListResponseSchema, raw);
+  },
+
+  /** Bounded read of a review queue: GET /api/imports/reviews/{parent} (read-only). */
+  reviewQueue: async (
+    parentId: string,
+    params: ImportReviewQueueParams = {},
+  ): Promise<ImportReviewResponse> => {
+    const query = new URLSearchParams();
+    if (params.offset !== undefined) query.set('offset', String(params.offset));
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    // --state is repeatable on the CLI; emit one query value per state, in order.
+    for (const state of params.states ?? []) query.append('state', state);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    const raw = await apiClient.get(`/imports/reviews/${encodeURIComponent(parentId)}${suffix}`);
+    return parseData(ImportReviewResponseSchema, raw);
+  },
+
+  /** Review-parent status: GET /api/imports/reviews/{parent}/status (read-only). */
+  reviewStatus: async (parentId: string): Promise<ImportReviewResponse> => {
+    const raw = await apiClient.get(`/imports/reviews/${encodeURIComponent(parentId)}/status`);
+    return parseData(ImportReviewResponseSchema, raw);
+  },
+
+  /** Atomic single-proposal edit: POST /api/imports/reviews/{parent}/confirm-edit. */
+  confirmEdit: async (
+    parentId: string,
+    req: ImportConfirmEditRequest,
+  ): Promise<ImportReviewResponse> => {
+    const body: Record<string, unknown> = {
+      expected_queue_revision: req.expected_queue_revision,
+      proposal_id: req.proposal_id,
+      decision: req.decision,
+    };
+    if (req.journal !== undefined) body.journal = req.journal;
+    if (req.selected_attachment_ids !== undefined) {
+      body.selected_attachment_ids = req.selected_attachment_ids;
+    }
+    const raw = await apiClient.post(
+      `/imports/reviews/${encodeURIComponent(parentId)}/confirm-edit`,
+      body,
+    );
+    return parseData(ImportReviewResponseSchema, raw);
+  },
+
+  /** Re-bind a review parent to a source root: POST /api/imports/reviews/{parent}/rebind. */
+  rebindReview: async (
+    parentId: string,
+    req: ImportRebindRequest,
+  ): Promise<ImportReviewResponse> => {
+    const raw = await apiClient.post(
+      `/imports/reviews/${encodeURIComponent(parentId)}/rebind`,
+      { source_root: req.source_root },
+    );
+    return parseData(ImportReviewResponseSchema, raw);
+  },
+
+  /** Run a child batch off the staged source root: POST /api/imports/reviews/{parent}/batch-run. */
+  batchRun: async (parentId: string): Promise<ImportRunResponse> => {
+    // No request body: the source root is recovered from the transient store
+    // server-side; sending nothing avoids leaking any locator.
+    const raw = await apiClient.post(
+      `/imports/reviews/${encodeURIComponent(parentId)}/batch-run`,
+      undefined,
+    );
+    return parseData(ImportRunResponseSchema, raw);
+  },
+
+  /** Roll back a child batch by id: POST /api/imports/rollback (id in body). */
+  childRollback: async (childId: string): Promise<ImportRollbackResponse> => {
+    // Child ids contain '#' (PARENT#batch-N) and cannot appear in a URL path;
+    // the id travels only in the JSON body.
+    const raw = await apiClient.post('/imports/rollback', { import_id: childId });
+    return parseData(ImportRollbackResponseSchema, raw);
+  },
+
+  /** Stream attachment bytes + verified metadata: GET /api/imports/reviews/{parent}/preview. */
+  preview: async (parentId: string, req: ImportPreviewRequest): Promise<ImportPreviewResult> => {
+    return fetchImportPreview(parentId, req);
+  },
 };
 
 export type ImportPlanResponse = z.infer<typeof ImportPlanResponseSchema>;
 export type ImportRunResponse = z.infer<typeof ImportRunResponseSchema>;
 export type ImportStatusResponse = z.infer<typeof ImportStatusResponseSchema>;
 export type ImportRollbackResponse = z.infer<typeof ImportRollbackResponseSchema>;
+
+// ── M7 historical-photo review types ──────────────────────────────────────
+// `queue_counts` and `queue_revision` are server-authoritative; never derive
+// counts locally. Recovery facts ride inside APIClientError.details.
+
+export type ImportReviewResponse = z.infer<typeof ImportReviewResponseSchema>;
+export type ImportReviewsListResponse = z.infer<typeof ImportReviewsListResponseSchema>;
+export type ImportPreviewMetadata = z.infer<typeof ImportPreviewMetadataSchema>;
+export type ImportReviewProposal = z.infer<typeof ImportReviewProposalSchema>;
+export type ImportReviewAttachment = z.infer<typeof ImportReviewAttachmentSchema>;
+export type ImportReviewState = z.infer<typeof ImportReviewStateSchema>;
+
+/** Editable journal fields an edit payload may carry (no locators). */
+export interface ImportEditableJournal {
+  title?: string;
+  date?: string;
+  topic?: string;
+  tags?: string[];
+  content?: string;
+}
+
+/** Confirm-edit decisions accepted by the frozen CLI (accept is rejected). */
+export type ImportReviewDecision = 'pending' | 'confirmed' | 'skipped';
+
+export interface ImportValidateRequest {
+  source_root: string;
+}
+export interface ImportStageRequest {
+  source_root: string;
+}
+export interface ImportRebindRequest {
+  source_root: string;
+}
+export interface ImportReviewsListParams {
+  after?: string;
+  limit?: number;
+}
+export interface ImportReviewQueueParams {
+  offset?: number;
+  limit?: number;
+  states?: ImportReviewState[];
+}
+export interface ImportConfirmEditRequest {
+  expected_queue_revision: number;
+  proposal_id: string;
+  decision: ImportReviewDecision;
+  journal?: ImportEditableJournal;
+  selected_attachment_ids?: string[];
+}
+export interface ImportPreviewRequest {
+  attachment_id: string;
+  proposal_id: string;
+}
+export interface ImportPreviewResult {
+  /** Exact attachment bytes (server-verified against the sidecar size). */
+  bytes: Uint8Array;
+  /** Same bytes as a Blob typed with the verified media type. */
+  blob: Blob;
+  /** Parsed, locator-free x-preview-metadata sidecar. */
+  metadata: ImportPreviewMetadata;
+}
+
+// Client-side bound on a buffered preview response (the server also bounds the
+// sidecar read); an oversized stream fails closed as preview-unavailable.
+const PREVIEW_MAX_BYTES = 32 * 1024 * 1024;
+
+// Closed client-side reasons for preview verification failures, surfaced in
+// APIClientError.details.reason. Drawn from the same closed set the backend
+// emits — never CLI passthrough, and never paths / hashes / bytes.
+const PREVIEW_REASON_UNAVAILABLE = 'preview_unavailable';
+const PREVIEW_REASON_MEDIA_UNSUPPORTED = 'preview_media_unsupported';
+const PREVIEW_REASON_IDENTITY_MISMATCH = 'preview_identity_mismatch';
+const PREVIEW_REASON_SIZE_MISMATCH = 'preview_size_mismatch';
+
+/** Build the single closed preview-unavailable error (fixed code + reason). */
+function previewUnavailableError(reason: string, status: number): APIClientError {
+  return new APIClientError('无法预览该照片', 'IMPORT_PREVIEW_UNAVAILABLE', status, { reason });
+}
+
+/** Parse a non-2xx / no-metadata preview response into a structured error.
+ *
+ * The backend error envelope is JSON ({ok:false, error:{code,message,details}})
+ * but its content-type may be misleading (e.g. image/jpeg), so the body is
+ * parsed by content, never by header. Safe `details` (reason, recovery facts)
+ * are preserved verbatim.
+ */
+async function parsePreviewError(response: Response): Promise<APIClientError> {
+  let payload: unknown;
+  try {
+    const text = await response.text();
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  const errorObj =
+    payload && typeof payload === 'object'
+      ? (payload as { error?: Record<string, unknown> }).error
+      : undefined;
+  if (errorObj && typeof errorObj === 'object') {
+    const code = typeof errorObj.code === 'string' ? errorObj.code : 'IMPORT_PREVIEW_UNAVAILABLE';
+    const message =
+      typeof errorObj.message === 'string' ? errorObj.message : '无法预览该照片';
+    const details = errorObj.details as Record<string, unknown> | undefined;
+    return new APIClientError(message, code, response.status, details);
+  }
+  return new APIClientError('无法预览该照片', 'IMPORT_PREVIEW_UNAVAILABLE', response.status);
+}
+
+/** Bounded binary preview fetch: exact bytes + Blob + parsed x-preview-metadata.
+ *
+ * This is NOT the JSON helper path: the body is consumed once as an
+ * ArrayBuffer and wrapped into a Blob. Locators/hashes never reach the UI (the
+ * metadata schema strips them, and nothing here logs response content).
+ *
+ * proposal_id is required (the backend route rejects omission) so the sidecar's
+ * exact identity can be checked. After a bounded read the metadata is verified
+ * fail-closed — schema/availability, media type, identity (parent/proposal/
+ * attachment equal the request), and a strict-integer size equal to the actual
+ * byte length — before any byte is trusted. Anything unexpected fails closed as
+ * IMPORT_PREVIEW_UNAVAILABLE with a closed details.reason.
+ */
+async function fetchImportPreview(
+  parentId: string,
+  req: ImportPreviewRequest,
+): Promise<ImportPreviewResult> {
+  const query = new URLSearchParams({
+    attachment_id: req.attachment_id,
+    proposal_id: req.proposal_id,
+  });
+  const url = `${API_BASE_URL}/imports/reviews/${encodeURIComponent(parentId)}/preview?${query.toString()}`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json, image/*' },
+  });
+
+  const metadataHeader = response.headers.get('x-preview-metadata');
+  // Error path: non-2xx, or a 2xx response that is actually a JSON error
+  // envelope (no preview metadata header). Parse the structured error by body
+  // content because the content-type may be misleading.
+  if (!response.ok || metadataHeader == null) {
+    throw await parsePreviewError(response);
+  }
+
+  // Content-Length pre-cap: reject an oversized declared body before buffering
+  // a single byte. The declared length can be absent or dishonest, so the
+  // post-read cap below is retained as a second guard.
+  const contentLength = response.headers.get('content-length');
+  if (contentLength !== null) {
+    const declared = Number(contentLength);
+    if (Number.isFinite(declared) && declared > PREVIEW_MAX_BYTES) {
+      throw previewUnavailableError(PREVIEW_REASON_UNAVAILABLE, response.status);
+    }
+  }
+
+  const buffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  if (bytes.byteLength > PREVIEW_MAX_BYTES) {
+    throw previewUnavailableError(PREVIEW_REASON_UNAVAILABLE, response.status);
+  }
+
+  let metadataRaw: unknown;
+  try {
+    metadataRaw = JSON.parse(metadataHeader);
+  } catch {
+    throw previewUnavailableError(PREVIEW_REASON_UNAVAILABLE, response.status);
+  }
+  if (!metadataRaw || typeof metadataRaw !== 'object') {
+    throw previewUnavailableError(PREVIEW_REASON_UNAVAILABLE, response.status);
+  }
+  const meta = metadataRaw as Record<string, unknown>;
+  // Fail closed: the sidecar must be the import_preview.v1 contract and the
+  // attachment must be marked available before any byte is trusted.
+  if (meta.schema_version !== 'import_preview.v1' || meta.available !== true) {
+    throw previewUnavailableError(PREVIEW_REASON_UNAVAILABLE, response.status);
+  }
+  if (meta.media_type !== 'image/jpeg') {
+    throw previewUnavailableError(PREVIEW_REASON_MEDIA_UNSUPPORTED, response.status);
+  }
+  // Identity: the sidecar's parent / proposal / attachment must equal the
+  // request, proving the bytes are for exactly what the caller asked.
+  if (
+    meta.parent_id !== parentId ||
+    meta.proposal_id !== req.proposal_id ||
+    meta.attachment_id !== req.attachment_id
+  ) {
+    throw previewUnavailableError(PREVIEW_REASON_IDENTITY_MISMATCH, response.status);
+  }
+  // Size: a strict non-negative integer (booleans/strings rejected) that equals
+  // the actual number of bytes read.
+  const sizeBytes = meta.size_bytes;
+  if (
+    typeof sizeBytes !== 'number' ||
+    !Number.isInteger(sizeBytes) ||
+    sizeBytes < 0 ||
+    sizeBytes !== bytes.byteLength
+  ) {
+    throw previewUnavailableError(PREVIEW_REASON_SIZE_MISMATCH, response.status);
+  }
+
+  // Strict, locator-free parse: the schema is non-passthrough, so any residual
+  // hash/path in the header is stripped before the UI sees the object. Every
+  // field was verified above, so this parse cannot fail on well-formed input.
+  const metadata = parseData(ImportPreviewMetadataSchema, metadataRaw);
+  const blob = new Blob([buffer], { type: metadata.media_type });
+  return { bytes, blob, metadata };
+}
 
 // ── Maintenance API (M33 — Data Doctor Repair UI) ────────────────────────
 

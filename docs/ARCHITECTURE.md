@@ -79,7 +79,9 @@ second ensure call or fall back to diagnostic nodes/lens/shadow surfaces.
 program sequence, not separate GUI phase tracks. The optional MCP projection
 does not create a GUI migration or route dependency.
 
-**Future only:** P3/Addons—including memoir, letters, psychology, persona, and social/photo import—have no SDK, schema, placeholder UI, or current product promise.
+**Future only:** P3/Addons—including memoir, letters, psychology, persona, and
+social-network import beyond the active historical-photo workbench—have no SDK,
+schema, placeholder UI, or current product promise.
 
 **Authority status:** The CLI `CHARTER.md §1.10` owns the active closed C1–C7
 Core admission domains and related non-Core/compatibility rules. GUI public
@@ -100,8 +102,8 @@ The GUI provides these durable surface groups:
   attachment access;
 - archive dashboards and maintenance views for health, index diagnostics,
   entity graph review, and index-tree diagnostics;
-- a visible `/import` Coming Soon surface; existing backend/CLI import
-  contracts remain dormant and are not a current GUI workflow;
+- an active `/import` historical-photo review workbench mediated by the
+  backend and canonical CLI import contracts;
 - future advanced memory surfaces only after the CLI exposes stable contracts
   for the underlying capability.
 
@@ -129,7 +131,8 @@ Core routes and surfaces:
 - Recall: deterministic keyword search plus Host Agent grounded-query handoff.
 - Archives: dashboard and entry points into maintenance/import surfaces.
 - Journal Detail: CLI-mediated journal content and attachment links.
-- Import: a visible Coming Soon surface with no active import actions.
+- Import: an active historical-photo review workbench; browser state remains
+  presentation-only.
 - Health, Index Diagnostics, Entity Graph, and Index Tree Diagnostics:
   maintenance and review surfaces backed by stable CLI envelopes.
 
@@ -152,6 +155,13 @@ Backend responsibilities:
   events;
 - enforce GUI-side limits only on already-returned CLI payloads;
 - hold transient request state only when needed to bridge CLI command shapes.
+
+For `/import`, the production route remains GUI → backend → CLI. The CLI import
+ledger is the sole durable authority for the review queue, batches, and
+rollback/recovery state. The backend may retain only a transient source-root
+mapping needed to invoke CLI commands; after restart the user must explicitly
+rebind and validate that local path. Browser state never becomes import
+authority.
 
 Backend routes must not directly open, read, write, stat, serve, scan, or query
 Life Index user-data files, SQLite caches, attachments, index files, entity
